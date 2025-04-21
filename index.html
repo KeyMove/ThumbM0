@@ -1,0 +1,2259 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>THUMB</title>
+</head>
+<style>
+    *{margin: 0;padding: 0;}
+    .mainpanel{
+        width: 100vw;
+        height: 100vh;
+        background-color: #ccc;
+        margin: auto;
+    }
+</style>
+<body>
+    <div class="mainpanel" id="mainpanel">
+        
+        
+    </div>
+</body>
+<script>
+    class DataHelper{
+        constructor(val=null){
+            this.data=val?val:[];
+            this.rpos=0;
+            this.LE=true;
+        }
+        w32(v){
+            if(this.LE){
+                this.data.push((v>>0)&0xff);
+                this.data.push((v>>8)&0xff);
+                this.data.push((v>>16)&0xff);
+                this.data.push((v>>24)&0xff);
+            }
+            else{
+                this.data.push((v>>24)&0xff);
+                this.data.push((v>>16)&0xff);
+                this.data.push((v>>8)&0xff);
+                this.data.push((v>>0)&0xff);
+            }
+            return this;
+        }
+        w16(v){
+            if(this.LE){
+                this.data.push((v>>0)&0xff);
+                this.data.push((v>>8)&0xff);
+            }
+            else{
+                this.data.push((v>>8)&0xff);
+                this.data.push((v>>0)&0xff);
+            }
+            return this;
+        }
+        w8(v){
+            this.data.push(v&0xff);
+            return this;
+        }
+        align(pos){
+            while(this.data.length<pos)this.data.push(0);
+            return this;
+        }
+        wbuff(buff){
+            buff.forEach(e=>this.data.push(e));
+            return this;
+        }
+
+        bytes(){
+            return this.data;
+        }
+
+
+        r8(){
+            return this.data[this.rpos++];
+        }
+        r16(){
+            let v=0;
+            if(this.LE){
+                v=this.data[this.rpos++];
+                v|=this.data[this.rpos++]<<8;
+            }
+            else{
+                v=this.data[this.rpos++]<<8;
+                v|=this.data[this.rpos++];
+            }
+            return v;
+        }
+        r32(){
+            let v=0;
+            if(this.LE){
+                v=this.data[this.rpos++];
+                v|=this.data[this.rpos++]<<8;
+                v|=this.data[this.rpos++]<<16;
+                v|=this.data[this.rpos++]<<24;
+            }
+            else{
+                v=this.data[this.rpos++]<<24;
+                v|=this.data[this.rpos++]<<16;
+                v|=this.data[this.rpos++]<<8;
+                v|=this.data[this.rpos++];
+            }
+            return v;
+        }
+        rbuff(len){
+            let v=[];
+            while(len--)v.push(this.data[this.rpos++]);
+            return v;
+        }
+        rappend(v,len){
+            while(len--)v.push(this.data[this.rpos++]);
+            return v;
+        }
+        rskip(len){
+            this.rpos+=len;
+            return this;
+        }
+        rcount(){
+            return this.data.length-this.rpos;
+        }
+    }
+
+    function Elfparse(elfarray){
+        if (Array.isArray(elfarray)) {
+            elfarray = new Uint8Array(elfarray);
+        }
+        let elfHeaderView = new DataView(elfarray.buffer);
+        let elfMagic = elfHeaderView.getUint32(0, true); // ELF magic number
+        if (elfMagic !== 0x464c457f) {
+            console.error('Not a valid ELF file');
+            return;
+        }
+        let elfHeader = {
+            'e_ident': elfarray.slice(0, 16),
+            'e_type': elfHeaderView.getUint16(16, true),
+            'e_machine': elfHeaderView.getUint16(18, true),
+            'e_version': elfHeaderView.getUint32(20, true),
+            'e_entry': elfHeaderView.getUint32(24, true),
+            'e_phoff': elfHeaderView.getUint32(28, true),
+            'e_shoff': elfHeaderView.getUint32(32, true),
+            'e_flags': elfHeaderView.getUint32(36, true),
+            'e_ehsize': elfHeaderView.getUint16(40, true),
+            'e_phentsize': elfHeaderView.getUint16(42, true),
+            'e_phnum': elfHeaderView.getUint16(44, true),
+            'e_shentsize': elfHeaderView.getUint16(46, true),
+            'e_shnum': elfHeaderView.getUint16(48, true),
+            'e_shstrndx': elfHeaderView.getUint16(50, true)
+        };
+        let elfProgramHeaders = [];
+        for (let i = 0; i < elfHeader.e_phnum; i++) {
+            let offset = elfHeader.e_phoff + i * elfHeader.e_phentsize;
+            let programHeader = {
+                'p_type': elfHeaderView.getUint32(offset, true),
+                'p_offset': elfHeaderView.getUint32(offset + 4, true),
+                'p_vaddr': elfHeaderView.getUint32(offset + 8, true),
+                'p_paddr': elfHeaderView.getUint32(offset + 12, true),
+                'p_filesz': elfHeaderView.getUint32(offset + 16, true),
+                'p_memsz': elfHeaderView.getUint32(offset + 20, true),
+                'p_flags': elfHeaderView.getUint32(offset + 24, true),
+                'p_align': elfHeaderView.getUint32(offset + 28, true)
+            };
+            elfProgramHeaders.push(programHeader);
+        }
+        let info={};
+        let rom = [];
+        for (let i = 0; i < elfProgramHeaders.length; i++) {
+            if (elfProgramHeaders[i].p_type === 1 && (elfProgramHeaders[i].p_flags & 0x4) !== 0) {
+                rom.push(elfarray.slice(elfProgramHeaders[i].p_offset, elfProgramHeaders[i].p_offset + elfProgramHeaders[i].p_filesz));
+            }
+        }
+        let elfSectionHeaders = [];
+        for (let i = 0; i < elfHeader.e_shnum; i++) {
+            let offset = elfHeader.e_shoff + i * elfHeader.e_shentsize;
+            let sectionHeader = {
+                'sh_name': elfHeaderView.getUint32(offset, true),
+                'sh_type': elfHeaderView.getUint32(offset + 4, true),
+                'sh_flags': elfHeaderView.getUint32(offset + 8, true),
+                'sh_addr': elfHeaderView.getUint32(offset + 12, true),
+                'sh_offset': elfHeaderView.getUint32(offset + 16, true),
+                'sh_size': elfHeaderView.getUint32(offset + 20, true),
+                'sh_link': elfHeaderView.getUint32(offset + 24, true),
+                'sh_info': elfHeaderView.getUint32(offset + 28, true),
+                'sh_addralign': elfHeaderView.getUint32(offset + 32, true),
+                'sh_entsize': elfHeaderView.getUint32(offset + 36, true)
+            };
+            elfSectionHeaders.push(sectionHeader);
+        }
+        
+
+        let elfSectionMap={};
+        let elfSectionNames = [];
+        let shstrtab = elfarray.slice(elfSectionHeaders[elfHeader.e_shstrndx].sh_offset, elfSectionHeaders[elfHeader.e_shstrndx].sh_offset + elfSectionHeaders[elfHeader.e_shstrndx].sh_size);
+        for (let i = 0; i < elfHeader.e_shnum; i++) {
+            let offset = elfSectionHeaders[i].sh_name;
+            let name = '';
+            for (let j = offset; shstrtab[j] !== 0; j++) {
+                name += String.fromCharCode(shstrtab[j]);
+            }
+            elfSectionNames.push(name);
+            elfSectionMap[name]=elfSectionHeaders[i];
+        }
+        let elfSymbolsSection = null;
+        let elfStringSection = null;
+        let elfStringMap = {};
+        let symtabindex=-1;
+        for (let i = 0; i < elfHeader.e_shnum; i++) {
+            if (elfSectionNames[i] === '.symtab') {
+                symtabindex=i;
+                elfSymbolsSection = elfarray.slice(elfSectionHeaders[i].sh_offset, elfSectionHeaders[i].sh_offset + elfSectionHeaders[i].sh_size);
+            }
+            if (elfSectionNames[i] === '.strtab') {
+                let strtabSection = elfStringSection = elfarray.slice(elfSectionHeaders[i].sh_offset, elfSectionHeaders[i].sh_offset + elfSectionHeaders[i].sh_size);
+                for (let j = 0; j < strtabSection.length; j++) {
+                    let name = '';
+                    let startindex=j;
+                    while (strtabSection[j] !== 0) {
+                        name += String.fromCharCode(strtabSection[j]);
+                        j++;
+                    }
+                    elfStringMap[startindex]=name;
+                }
+            }
+        }
+        let elfSymbols = [];
+        let symbolNames = {};
+        if (elfSymbolsSection) {
+            let symbolSize = 16; // Assuming 32-bit ELF
+            let numSymbols = elfSymbolsSection.length / symbolSize;
+            for (let i = 0; i < numSymbols; i++) {
+                let offset = elfSectionHeaders[symtabindex].sh_offset + i * symbolSize;
+                let symbol = {
+                    'st_name':  elfHeaderView.getUint32(offset, true),
+                    'st_value': elfHeaderView.getUint32(offset + 4, true),
+                    'st_size':  elfHeaderView.getUint32(offset + 8, true),
+                    'st_info':  elfHeaderView.getUint8(offset + 12),
+                    'st_other': elfHeaderView.getUint8(offset + 13),
+                    'st_shndx': elfHeaderView.getUint16(offset + 14, true)
+                };
+                elfSymbols.push(symbol);
+            }
+            
+            for (let symbol of elfSymbols) {
+                let name = elfStringMap[symbol.st_name];
+                if (name) {
+                    symbolNames[name] = symbol;
+                }
+            }
+            console.log(symbolNames);
+            info.symbol=symbolNames;
+        }
+        if(elfSectionMap["DevDscr"]){
+            let dt=elfSectionMap["DevDscr"];
+            let constDataSection = dt.sh_offset;
+            let constDataSize = dt.sh_size;
+            let flashDevice = {
+                Vers: elfHeaderView.getUint16(constDataSection, true),
+                DevName: '',
+                DevType: elfHeaderView.getUint16(constDataSection + 2+128, true),
+                DevAdr: elfHeaderView.getUint32(constDataSection + 4+128, true),
+                szDev: elfHeaderView.getUint32(constDataSection + 8+128, true),
+                szPage: elfHeaderView.getUint32(constDataSection + 12+128, true),
+                Res: elfHeaderView.getUint32(constDataSection + 16+128, true),
+                valEmpty: elfHeaderView.getUint32(constDataSection + 20+128, true),
+                toProg: elfHeaderView.getUint32(constDataSection + 24+128, true),
+                toErase: elfHeaderView.getUint32(constDataSection + 28+128, true),
+                sectors: []
+            };
+
+            for (let i = 0; i < 128; i++) {
+                flashDevice.DevName += String.fromCharCode(elfarray[constDataSection+i+2]);
+            }
+            for (let i = 0; i < 512; i += 8) {
+                let sector = {
+                    szSector: elfHeaderView.getUint32(constDataSection + 32 + 128 + i, true),
+                    AddrSector: elfHeaderView.getUint32(constDataSection + 32 + 128 + i + 4, true)
+                };
+                if(sector.szSector===0xffffffff)break;
+                flashDevice.sectors.push(sector);
+            }
+            //let BLOB_HEADER = [0x00,0xBE,0x0A,0xE0,0x0D,0x78,0x2D,0x06,0x68,0x40,0x08,0x24,0x40,0x00,0x00,0xD3,0x58,0x40,0x64,0x1E,0xFA,0xD1,0x49,0x1C,0x52,0x1E,0x00,0x2A,0xF2,0xD1,0x70,0x47];
+            let BLOB_HEADER = [0x00,0xBE,0x0A,0xE0];
+            let HEADER_SIZE = BLOB_HEADER.length;
+            let Stack_Size = 128;
+            let entry = 0x20000000;
+            flashDevice['Init']         =entry+HEADER_SIZE+symbolNames['Init'       ].st_value;
+            flashDevice['UnInit']       =entry+HEADER_SIZE+symbolNames['UnInit'     ].st_value;
+            flashDevice['EraseChip']    =entry+HEADER_SIZE+symbolNames['EraseChip'  ].st_value;
+            flashDevice['EraseSector']  =entry+HEADER_SIZE+symbolNames['EraseSector'].st_value;
+            flashDevice['ProgramPage']  =entry+HEADER_SIZE+symbolNames['ProgramPage'].st_value;
+            let blobHeaderArray = new Uint8Array(BLOB_HEADER);
+            let romWithBlobHeader = new Uint8Array(rom[0].length + blobHeaderArray.length);
+            romWithBlobHeader.set(blobHeaderArray, 0);
+            romWithBlobHeader.set(rom[0], blobHeaderArray.length);
+            rom[0] = romWithBlobHeader;
+            flashDevice['ROM']=rom[0];
+            flashDevice['RAM']=entry;
+            flashDevice['BUFF']=(entry+rom[0].length+1023)&~1023;
+            flashDevice['BKPT']=entry+1;
+            flashDevice['RSB']=entry+rom[0].length;
+            flashDevice['RSP']=entry+rom[0].length+flashDevice.szPage+Stack_Size;
+            //console.log(flashDevice);
+            return flashDevice;
+        }
+        info.ROM=rom.length>0?rom[0]:null;
+        let addr2name={};
+        for (let [k,v] of Object.entries(info.symbol)) {
+            addr2name[v.st_value]=k;
+        }
+        info.AddrName=addr2name;
+        return info;
+    }
+
+    function download_uint8(data,name='rom.bin'){
+        if(!data)return;
+        if(Array.isArray(data)){
+            data=new Uint8Array(data);
+        }
+        const blob = new Blob([data], { type: 'application/octet-stream' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.href = url;
+        link.download = name;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+</script>
+<script>
+/**
+ * LayerSplit 类 - 提供可拖拽分割的面板布局功能
+ * 采用单例模式设计，确保全局只存在一个实例
+ * 自动注入必要的CSS样式（仅首次初始化时执行）
+ */
+ class LayerSplit {
+    // 私有静态变量，用于存储单例实例
+    static #instance = null;
+    // 标记CSS是否已初始化，避免重复注入
+    static #cssInitialized = false;
+
+    /**
+     * 构造函数（私有方法，外部不能直接实例化）
+     */
+    constructor() {
+        if (!LayerSplit.#cssInitialized) {
+            this.#initializeCSS();
+            LayerSplit.#cssInitialized = true;
+        }
+    }
+
+    /**
+     * 获取单例实例
+     * @returns {LayerSplit} 返回LayerSplit的单例实例
+     */
+    static getInstance() {
+        if (!LayerSplit.#instance) {
+            LayerSplit.#instance = new LayerSplit();
+            console.log("LayerSplit初始化完成（此日志仅显示一次）");
+        }
+        return LayerSplit.#instance;
+    }
+
+    /**
+     * 私有方法：初始化CSS样式
+     * 创建并注入分割面板所需的样式到文档头部
+     */
+    #initializeCSS() {
+        const style = document.createElement('style');
+        style.type = 'text/css';
+        style.textContent = `
+            /* 垂直布局容器 */
+            .ls-container {
+                display: flex;
+                flex-direction: column;
+                height: 100%;
+            }
+            /* 水平布局容器 */
+            .ls-containerw {
+                display: flex;
+                flex-direction: row;
+                height: 100%;
+            }
+            /* 面板内容区域 */
+            .ls-pane {
+                display: block;
+                width: 100%;
+                height: 100%;
+            }
+            /* 顶部面板样式 */
+            .ls-top-pane {
+                border: 1px solid #333;
+                background-color: #f0f0f0;
+                flex: 1;
+                overflow: auto;
+            }
+            /* 底部面板样式 */
+            .ls-bottom-pane {
+                border: 1px solid #333;
+                background-color: #d0d0d0;
+                flex: 1;
+                overflow: auto;
+            }
+            /* 左侧面板样式 */
+            .ls-left-pane {
+                border: 1px solid #333;
+                background-color: #f0f0f0;
+                flex: 1;
+                overflow: auto;
+            }
+            /* 右侧面板样式 */
+            .ls-right-pane {
+                border: 1px solid #333;
+                background-color: #d0d0d0;
+                flex: 1;
+                overflow: auto;
+            }
+            /* 垂直分割条样式 */
+            .ls-resizer {
+                height: 5px;
+                background-color: #ccc;
+                cursor: ns-resize;
+                user-select: none;
+            }
+            /* 水平分割条样式 */
+            .ls-resizerw {
+                width: 5px;
+                background-color: #ccc;
+                cursor: ew-resize;
+                user-select: none;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    /**
+     * 创建分割面板
+     * @param {HTMLElement} div - 要挂载面板的父容器元素
+     * @param {boolean} [row=false] - 是否为垂直布局（true=垂直，false=水平）
+     * @param {number} [size=0] - 初始分割位置（像素值，正数表示第一个面板大小，负数表示第二个面板大小）
+     * @returns {HTMLElement} 返回创建的面板容器元素
+     */
+    create(div, row = false, size = 0) {
+        // 创建容器元素
+        const val = document.createElement("div");
+        // 添加布局类名
+        val.classList.add(row ? 'ls-container' : 'ls-containerw');
+        
+        // 根据布局方向生成对应的HTML结构
+        val.innerHTML = row ?
+            `<div class="ls-top-pane"><div class="ls-pane"></div></div>
+             <div class="ls-resizer"></div>
+             <div class="ls-bottom-pane"><div class="ls-pane"></div></div>` :
+            `<div class="ls-left-pane"><div class="ls-pane"></div></div>
+             <div class="ls-resizerw"></div>
+             <div class="ls-right-pane"><div class="ls-pane"></div></div>`;
+        
+        // 存储面板元素引用
+        val.layer = [val.children[0].children[0], val.children[2].children[0]];
+        // 存储分割条元素引用
+        val.resizediv = val.children[1];
+        // 记录布局方向
+        val.row = row;
+        // 拖拽状态标志
+        val.isResizing = false;
+        // 是否启用拖拽调整
+        val.enable = true;
+
+        // 鼠标按下事件处理（开始拖拽）
+        const onMouseDown = (e) => {
+            val.isResizing = true;
+        };
+
+        // 鼠标移动事件处理（拖拽调整）
+        const onMouseMove = (e) => {
+            if (!val.isResizing || !val.enable) return;
+            
+            // 计算鼠标相对位置
+            const { top, left } = val.getBoundingClientRect();
+            const mouseY = e.clientY - top;
+            const mouseX = e.clientX - left;
+            
+            // 计算新的分割比例
+            let newValue = val.row ? 
+                (mouseY / val.clientHeight * 100) : 
+                (mouseX / val.clientWidth * 100);
+            
+            // 应用新的分割比例
+            val.children[0].style.flexBasis = `${newValue.toFixed(1)}%`;
+            val.children[2].style.flexBasis = `${100 - newValue.toFixed(1)}%`;
+        };
+
+        // 鼠标释放事件处理（结束拖拽）
+        const onMouseUp = () => {
+            val.isResizing = false;
+        };
+
+        // 绑定事件监听器
+        val.resizediv.addEventListener('mousedown', onMouseDown);
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+
+        // 添加停止拖拽功能的方法
+        val.stop = () => {
+            val.resizediv.removeEventListener('mousedown', onMouseDown);
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        };
+
+        // 设置初始分割位置
+        if (size !== 0) {
+            // 处理百分比值 (范围 -1 到 1)
+            if (size > -1 && size < 1) {
+                let percentage;
+                if (size > 0) {
+                    // 正数表示第一个面板的比例 (0-1)
+                    percentage = Math.min(Math.max(size, 0), 1) * 100;
+                } else {
+                    // 负数表示第二个面板的比例 (-1-0)
+                    percentage = 100 - (Math.min(Math.max(-size, 0), 1) * 100);
+                }
+                val.children[0].style.flexBasis = `${percentage.toFixed(1)}%`;
+                val.children[2].style.flexBasis = `${(100 - percentage).toFixed(1)}%`;
+            } 
+            // 处理像素值
+            else {
+                const { width, height } = div.getBoundingClientRect();
+                const containerSize = row ? height : width;
+                let newValue;
+                
+                if (size > 0) {
+                    // 正数表示第一个面板的像素大小
+                    newValue = Math.min(size, containerSize) / containerSize * 100;
+                } else {
+                    // 负数表示第二个面板的像素大小
+                    newValue = 100 - (Math.min(-size, containerSize) / containerSize * 100);
+                }
+                
+                val.children[0].style.flexBasis = `${newValue.toFixed(1)}%`;
+                val.children[2].style.flexBasis = `${(100 - newValue).toFixed(1)}%`;
+            }
+        }
+
+        // 将面板添加到父容器
+        div.appendChild(val);
+        return val;
+    }
+}
+
+// 使用示例：
+// const layerSplit = LayerSplit.getInstance();
+// const splitPanel = layerSplit.create(document.getElementById('container'), true, 200);
+    // Usage remains the same:
+    const layerSplit = LayerSplit.getInstance();
+</script>
+
+<script>
+    /**
+     * MacOS风格的距离感应Dock栏类
+     * @class
+     * @classdesc 创建一个具有距离感应放大效果的MacOS风格Dock栏
+     * 
+     * @param {HTMLElement|string} container - 容器元素或元素ID，Dock将渲染到此容器中
+     * @param {Array<Object>} [items=[]] - 初始Dock项目数组，每个项目应包含emoji和app属性
+     * @param {Object} [options={}] - 配置选项
+     * @param {string} [options.position='left'] - Dock位置 ('left', 'right', 'top' 或 'bottom')
+     * @param {number} [options.scaleFactor=0.6] - 鼠标悬停时的放大系数
+     * 
+     * @example
+     * // 基本用法
+     * const dock = new MacOSDock('myDock', [
+     *     { emoji: '😀', app: 'finder' },
+     *     { emoji: '😄', app: 'safari' }
+     * ], { position: 'top' });
+     * 
+     * // 动态添加项目
+     * dock.addItem({ emoji: '🎉', app: 'party' });
+     */
+     class MacOSDock {
+        constructor(container, items = [], options = {}) {
+            this.container = typeof container === 'string' ? document.getElementById(container) : container;
+            this.items = items;
+            this.options = {
+                position: 'left',
+                scaleFactor: 0.6,
+                ...options
+            };
+            
+            // 初始化Dock
+            this.init();
+            // 渲染Dock内容
+            this.render();
+            // 设置事件监听
+            this.setupEventListeners();
+        }
+        
+        /**
+         * 初始化Dock结构
+         * @private
+         */
+        init() {
+            // 如果样式不存在则创建样式
+            if (!document.getElementById('dock-styles')) {
+                const style = document.createElement('style');
+                style.id = 'dock-styles';
+                style.textContent = this.getDockStyles();
+                document.head.appendChild(style);
+            }
+            
+            // 创建Dock容器
+            this.dockContainer = document.createElement('div');
+            this.dockContainer.className = 'dock-container';
+            
+            // 创建Dock主体
+            this.dock = document.createElement('div');
+            this.dock.className = 'dock';
+            this.dock.id = 'dock';
+            
+            // 组装DOM结构
+            this.dockContainer.appendChild(this.dock);
+            this.container.appendChild(this.dockContainer);
+            
+            // 初始尺寸设置
+            this.updateDockDimensions();
+        }
+        
+        /**
+         * 更新Dock尺寸（带动画）
+         * @private
+         */
+        updateDockDimensions() {
+            const isVertical = this.options.position === 'left' || this.options.position === 'right';
+            const itemSize = 50; // 每个项目大小
+            const itemMargin = 10; // 每个项目的margin总和
+            const dockPadding = 'topbottom'.includes(this.options.position)?0:20; // Dock的padding总和
+            
+            if (isVertical) {
+                // 垂直Dock（左/右）
+                const newHeight = this.items.length * (itemSize + itemMargin) + dockPadding;
+                this.dock.style.height = `${newHeight}px`;
+                this.dock.style.width = '';
+            } else {
+                // 水平Dock（上/下）
+                const newWidth = this.items.length * (itemSize + itemMargin) + dockPadding;
+                this.dock.style.width = `${newWidth}px`;
+                this.dock.style.height = '';
+            }
+        }
+        
+        /**
+         * 获取Dock基础样式
+         * @private
+         * @returns {string} CSS样式字符串
+         */
+        getDockStyles() {
+            return `
+                .dock-container {
+                    position: fixed;
+                    z-index: 1000;
+                }
+                
+                /* 垂直Dock（左/右）样式 */
+                .dock-container[data-position="left"] {
+                    left: 20px;
+                    top: 50%;
+                    transform: translateY(-50%);
+                }
+                
+                .dock-container[data-position="right"] {
+                    right: 20px;
+                    top: 50%;
+                    transform: translateY(-50%);
+                }
+                
+                /* 水平Dock（上/下）样式 */
+                .dock-container[data-position="top"] {
+                    top: 20px;
+                    left: 50%;
+                    transform: translateX(-50%);
+                }
+                
+                .dock-container[data-position="bottom"] {
+                    bottom: 20px;
+                    left: 50%;
+                    transform: translateX(-50%);
+                }
+    
+                .dock {
+                    user-select: none;
+                    background: rgba(255, 255, 255, 0.4);
+                    backdrop-filter: blur(10px);
+                    border-radius: 18px;
+                    padding: 5px 10px;
+                    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+                    border: 1px solid rgba(255, 255, 255, 0.2);
+                    font-size: 2rem;
+                    transition: all 0.2s ease-out;
+                    will-change: height, width;
+                }
+                
+                /* 垂直Dock布局 */
+                .dock[data-position="left"],
+                .dock[data-position="right"] {
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                }
+                
+                /* 水平Dock布局 */
+                .dock[data-position="top"],
+                .dock[data-position="bottom"] {
+                    display: flex;
+                    flex-direction: row;
+                    align-items: center;
+                }
+    
+                .dock-item {
+                    width: 50px;
+                    height: 50px;
+                    position: relative;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    font-size: calc(2rem * var(--scale, 1));
+                    transition: all 0.15s ease-out;
+                    opacity: 1;
+                }
+                
+                /* 垂直Dock项目间距 */
+                .dock[data-position="left"] .dock-item,
+                .dock[data-position="right"] .dock-item {
+                    margin: 5px 0;
+                    position: relative;
+                    left: calc((2rem * var(--scale, 1) - 2rem)/2);
+                }
+                
+                /* 水平Dock项目间距 */
+                .dock[data-position="top"] .dock-item,
+                .dock[data-position="bottom"] .dock-item {
+                    margin: 0 5px;
+                    position: relative;
+                    top: calc((2rem * var(--scale, 1) - 2rem)/2);
+                }
+    
+                /* 添加项目时的动画 */
+                .dock-item.adding {
+                    animation: fadeIn 0.5s ease-out forwards;
+                }
+    
+                /* 移除项目时的动画 */
+                .dock-item.removing {
+                    animation: fadeOut 0.1s ease-out forwards;
+                }
+    
+                .dock-item::after {
+                    content: '';
+                    position: absolute;
+                    background-color: rgba(0, 0, 0, 0.4);
+                    border-radius: 50%;
+                    opacity: 0;
+                    transition: opacity 0.2s ease;
+                }
+                
+                /* 垂直Dock的活动指示器位置 */
+                .dock[data-position="left"] .dock-item::after,
+                .dock[data-position="right"] .dock-item::after {
+                    bottom: -5px;
+                    width: 5px;
+                    height: 5px;
+                }
+                
+                /* 水平Dock的活动指示器位置 */
+                .dock[data-position="top"] .dock-item::after,
+                .dock[data-position="bottom"] .dock-item::after {
+                    width: 5px;
+                    height: 5px;
+                }
+                
+                .dock[data-position="top"] .dock-item::after {
+                    bottom: -5px;
+                }
+                
+                .dock[data-position="bottom"] .dock-item::after {
+                    top: -5px;
+                }
+    
+                .dock-item.active::after {
+                    opacity: 1;
+                }
+    
+                /* 应用名称提示框 */
+                .dock-item-tooltip {
+                    position: absolute;
+                    background: rgba(0, 0, 0, 0.7);
+                    color: white;
+                    padding: 5px 10px;
+                    border-radius: 4px;
+                    font-size: 14px;
+                    white-space: nowrap;
+                    pointer-events: none;
+                    opacity: 0;
+                    transition: all 0.3s ease;
+                    z-index: 1001;
+                }
+                
+                /* 垂直Dock的工具提示位置 */
+                .dock[data-position="left"] .dock-item-tooltip {
+                    left: 60px;
+                    transform: translateX(-10px);
+                }
+                
+                .dock[data-position="right"] .dock-item-tooltip {
+                    right: 60px;
+                    transform: translateX(10px);
+                }
+                
+                /* 水平Dock的工具提示位置 */
+                .dock[data-position="bottom"] .dock-item-tooltip {
+                    bottom: 60px;
+                    transform: translateY(10px);
+                }
+                
+                .dock[data-position="top"] .dock-item-tooltip {
+                    top: 60px;
+                    transform: translateY(-10px);
+                }
+    
+                .dock-item:hover .dock-item-tooltip {
+                    opacity: 1;
+                    transform: translateX(0);
+                }
+                
+                .dock[data-position="top"] .dock-item:hover .dock-item-tooltip,
+                .dock[data-position="bottom"] .dock-item:hover .dock-item-tooltip {
+                    transform: translateY(0);
+                }
+    
+                /* 淡入动画 */
+                @keyframes fadeIn {
+                    from {
+                        opacity: 0;
+                        transform: translateY(10px);
+                    }
+                    to {
+                        opacity: 1;
+                        transform: translateY(0);
+                    }
+                }
+    
+                /* 淡出动画 */
+                @keyframes fadeOut {
+                    from {
+                        opacity: 1;
+                        transform: translateY(0);
+                    }
+                    to {
+                        opacity: 0;
+                        transform: translateY(-10px);
+                    }
+                }
+            `;
+        }
+        
+        /**
+         * 创建工具提示元素
+         * @private
+         * @param {string} appName - 应用名称
+         * @returns {HTMLElement} 工具提示元素
+         */
+        createTooltip(appName) {
+            const tooltip = document.createElement('div');
+            tooltip.className = 'dock-item-tooltip';
+            tooltip.textContent = appName;
+            return tooltip;
+        }
+        
+        /**
+         * 渲染Dock内容
+         * @private
+         */
+        render() {
+            if(this.items.length==0) this.dockContainer.style.display='none';
+            
+            // 设置Dock位置属性
+            this.dockContainer.setAttribute('data-position', this.options.position);
+            this.dock.setAttribute('data-position', this.options.position);
+            
+            // 清空现有内容
+            this.dock.innerHTML = '';
+            
+            // 遍历所有项目并创建对应的DOM元素
+            this.items.forEach((item, index) => {
+                const dockItem = document.createElement('div');
+                dockItem.className = 'dock-item';
+                dockItem.dataset.app = item.app || `app-${index}`;
+                dockItem.callback = (()=>item.callback(this,index)) || (()=>null);
+                dockItem.dataset.index = index;
+                dockItem.textContent = item.emoji || '📁';
+                
+                // 添加工具提示
+                const tooltip = this.createTooltip(item.app || `App ${index + 1}`);
+                dockItem.appendChild(tooltip);
+                
+                this.dock.appendChild(dockItem);
+            });
+            
+            // 更新Dock尺寸
+            this.updateDockDimensions();
+        }
+        
+        /**
+         * 设置事件监听器
+         * @private
+         */
+        setupEventListeners() {
+            // 点击事件 - 标记活动项目
+            this.dock.addEventListener('click', (e) => {
+                const item = e.target.closest('.dock-item');
+                if (item) {
+                    // 移除所有活动状态
+                    this.dock.querySelectorAll('.dock-item').forEach(i => i.classList.remove('active'));
+                    // 添加当前活动状态
+                    item.classList.add('active');
+                    item.callback();
+                }
+            });
+            
+            // 鼠标移动事件 - 实现距离感应效果
+            this.dock.addEventListener('mousemove', (e) => {
+                const item = e.target.closest('.dock-item');
+                if (item) {
+                    const isVertical = this.options.position === 'left' || this.options.position === 'right';
+                    const rect = item.getBoundingClientRect();
+                    
+                    // 根据Dock方向计算偏移量
+                    let offset;
+                    if (isVertical) {
+                        offset = Math.abs(e.clientY - rect.top) / rect.height;
+                    } else {
+                        offset = Math.abs(e.clientX - rect.left) / rect.width;
+                    }
+                    
+                    const prev = item.previousElementSibling;
+                    const next = item.nextElementSibling;
+                    
+                    // 重置所有缩放
+                    this.resetScale();
+                    
+                    // 根据距离设置相邻元素的缩放
+                    if (prev) prev.style.setProperty('--scale', 1 + this.options.scaleFactor * Math.abs(offset - 1));
+                    item.style.setProperty('--scale', 1 + this.options.scaleFactor);
+                    if (next) next.style.setProperty('--scale', 1 + this.options.scaleFactor * offset);
+                }
+            });
+            
+            // 鼠标离开事件 - 重置所有缩放
+            this.dock.addEventListener('mouseleave', () => {
+                this.resetScale();
+            });
+        }
+        
+        /**
+         * 重置所有Dock项目的缩放比例
+         * @public
+         */
+        resetScale() {
+            this.dock.querySelectorAll('.dock-item').forEach(item => {
+                item.style.setProperty('--scale', 1);
+            });
+        }
+        
+        /**
+         * 添加一个新项目到Dock（带淡入动画和尺寸动画）
+         * @public
+         * @param {Object} item - 要添加的项目
+         * @param {string} item.emoji - 项目显示的emoji图标
+         * @param {string} item.app - 项目关联的应用标识
+         * @returns {Promise} 动画完成后resolve的Promise
+         */
+        addItem(item) {
+            if(this.items.length==0) this.dockContainer.style.display='block';
+            return new Promise((resolve) => {
+                // 先更新数据
+                this.items.push(item);
+                
+                let index=this.items.length-1;
+                // 创建新项目元素
+                const dockItem = document.createElement('div');
+                dockItem.className = 'dock-item adding';
+                dockItem.dataset.app = item.app || `app-${index}`;
+                dockItem.callback = (()=>item.callback(this,index)) || (()=>null);
+                dockItem.dataset.index = index;
+                dockItem.textContent = item.emoji || '📁';
+                
+                // 添加工具提示
+                const tooltip = this.createTooltip(item.app || `App ${this.items.length}`);
+                dockItem.appendChild(tooltip);
+                
+                // 添加到DOM
+                this.dock.appendChild(dockItem);
+                
+                // 同步更新尺寸（CSS transition会自动处理动画）
+                this.updateDockDimensions();
+                
+                // 动画结束后移除临时类
+                dockItem.addEventListener('animationend', () => {
+                    dockItem.classList.remove('adding');
+                    resolve();
+                }, { once: true });
+            });
+        }
+        
+        /**
+         * 移除指定索引的项目（带淡出动画和尺寸动画）
+         * @public
+         * @param {number} index - 要移除的项目索引
+         * @returns {Promise<boolean>} Promise，动画完成后resolve是否移除成功
+         */
+        removeItem(index) {
+            return new Promise((resolve) => {
+                if (index >= 0 && index < this.items.length) {
+                    const dockItems = this.dock.querySelectorAll('.dock-item');
+                    if (index < dockItems.length) {
+                        const itemToRemove = dockItems[index];
+                        
+                        // 添加移除动画类
+                        itemToRemove.classList.add('removing');
+                        
+                        // 同步更新尺寸（CSS transition会自动处理动画）
+                        this.updateDockDimensions();
+                        
+                        // 动画结束后移除元素
+                        itemToRemove.addEventListener('animationend', () => {
+                            this.items.splice(index, 1);
+                            this.render(); // 重新渲染确保状态一致
+                            if(this.items.length==0) this.dockContainer.style.display='none';
+                            resolve(true);
+                        }, { once: true });
+                    } else {
+                        this.items.splice(index, 1);
+                        this.render();
+                        if(this.items.length==0) this.dockContainer.style.display='none';
+                        resolve(true);
+                    }
+                } else {
+                    resolve(false);
+                }
+            });
+        }
+        
+        /**
+         * 移除最后一个项目（带淡出动画和尺寸动画）
+         * @public
+         * @returns {Promise<boolean>} Promise，动画完成后resolve是否移除成功
+         */
+        removeLastItem() {
+            return this.removeItem(this.items.length - 1);
+        }
+        
+        /**
+         * 更新所有Dock项目
+         * @public
+         * @param {Array<Object>} newItems - 新的项目数组
+         */
+        updateItems(newItems) {
+            this.items = newItems;
+            this.render();
+        }
+        
+        /**
+         * 销毁Dock实例，清理DOM
+         * @public
+         */
+        destroy() {
+            this.dockContainer.remove();
+        }
+    }
+</script>
+
+<script>
+    
+    var lastasm;
+    var viewhex=false;
+    var dh=null;
+    var bindata=[];
+    var rom=null;
+    var prerom=null;
+    var AddrName={};
+
+    var mp=layerSplit.create(document.getElementById('mainpanel'),false,.5);
+    mp.layer[0].innerHTML=`<div id="inputtext"  contenteditable="true" style="width: 95%; float: left; height: 93%; margin: 5px; border: 2px solid;overflow-y: scroll;font-size: 11px;font-family: monospace;"></div><span style="float: left;  font-size: 2rem;text-shadow: 4px 4px 4px rgba(0, 0, 0, 1);padding-left: 50px;">HEX</span>`;
+    mp.layer[1].innerHTML=`<div id="outputtext" contenteditable="true" style="width: 95%; float: right; height: 93%; margin: 5px; border: 2px solid;overflow-y: scroll;font-size: 11px;font-family: monospace;"></div><span style="float: right;font-size: 2rem;text-shadow: 4px 4px 4px rgba(0, 0, 0, 1);padding-right: 80px;">ASM</span>`;
+
+    const inputDiv = document.getElementById('inputtext');
+    const outputDiv = document.getElementById('outputtext');
+
+    var DockBar=new MacOSDock(document.querySelector(".mainpanel"),[
+            { emoji: '📤', app: '反编译',callback:($,i)=>{toASM()}},
+            { emoji: '📥', app: '编译'  ,callback:($,i)=>{toThumb()}},
+            { emoji: '💾', app: '保存'  ,callback:($,i)=>{download_uint8(rom)}},
+        ],{position:'bottom'});
+
+    
+
+    /**
+     * ARM Thumb 指令集编解码器
+     * 
+     * 这个类实现了 ARM Thumb 指令集的编码和解码功能，支持16位 Thumb 指令的处理，
+     * 包括反汇编、汇编、地址计算和标签处理等功能。
+     * 
+     * ## 功能特点
+     * - 支持大多数 Thumb 指令的编码和解码
+     * - 处理 PC 相对地址和标签
+     * - 支持特殊寄存器(SP, LR, PC)
+     * - 提供十六进制格式化工具
+     * - 支持分支指令的标签修复
+     * 
+     * ## 使用示例
+     * 
+     * ### 1. 反汇编机器码
+     * ```javascript
+     * const thumb = new ThumbM0();
+     * const machineCode = new Uint8Array([0x01, 0x20, 0x02, 0x21, 0x08, 0x44]);
+     * const disassembly = thumb.parseThumb(machineCode, true);
+     * console.log(disassembly);
+     * ```
+     * 
+     * ### 2. 汇编代码生成机器码
+     * ```javascript
+     * const assemblyCode = `
+     *     MOV R0, #1
+     *     MOV R1, #2
+     *     ADD R0, R0, R1
+     * `;
+     * const encoded = thumb.parseASM(assemblyCode);
+     * console.log(encoded);
+     * ```
+     * 
+     * ### 3. 编码单条指令
+     * ```javascript
+     * const [opcode, mnemonic, operands] = thumb.encodeThumb('ADD R0, R1, R2');
+     * console.log(`Opcode: 0x${thumb.Hex16(opcode)}, Mnemonic: ${mnemonic}, Operands: ${operands}`);
+     * ```
+     * 
+     * ### 4. 十六进制格式化
+     * ```javascript
+     * console.log(thumb.Hex8(15));    // 输出 "0F"
+     * console.log(thumb.Hex16(255));  // 输出 "00FF"
+     * console.log(thumb.Hex32(65535));// 输出 "0000FFFF"
+     * ```
+     * 
+     * ## 方法概述
+     * - `parseThumb()` - 反汇编机器码
+     * - `parseASM()` - 汇编代码生成机器码
+     * - `encodeThumb()` - 编码单条指令
+     * - `Hex8/Hex16/Hex32()` - 十六进制格式化
+     * - `bits()` - 位提取工具
+     * - `decode()` - 机器码解码内部方法
+     * 
+     * @class ThumbM0
+     */
+    class ThumbM0{
+        constructor(){
+            this.baseAddr=0x08000000;
+            // 存储地址名称映射表
+            this.AddrName = {};
+            // 存储指令生成器映射表
+            this.thumbgenMap = {};
+            // 记录最后处理的地址
+            this.lastAddr = 0;
+            // 指令生成器注册函数
+            const genthumb=(name,req,action)=>{
+                if(!this.thumbgenMap[name])this.thumbgenMap[name]={};
+                if(this.thumbgenMap[name][req])console.log(`rep:${name}:${req}`);
+                
+                this.thumbgenMap[name][req]=action;
+                return action;
+            }
+            // 辅助函数：将数字转换为指定位数的二进制字符串
+            const b2=(x,b)=>`000000000000000${x.toString(2)}`.slice(-b);
+            // 寄存器名称转换函数
+            const Regs=(r)=>r<13 && (r<10 && `R${r} ` || `R${r}`) || (['SP','LR','PC'])[r-13];
+            // 条件分支指令处理函数
+            const Bcond=(b,offset)=>`B${(['EQ','NE','CS','CC','MI','PL','VS','VC','HI','LS','GE','LT','GT','LE'])[b]}  ${offset&0x80?(this.lastAddr=(((offset|~255)<<1)+4)):(this.lastAddr=((offset<<1)+4))}  ;@PC+BL`;
+            // 将寄存器函数暴露为类属性
+            this.Regs=Regs;
+            // Thumb 指令集编码表
+            /* 指令格式说明：
+            '二进制模式': {
+                子模式: [
+                    '参数位模式',
+                    解码函数,
+                    编码生成器
+                ]
+            }
+            */
+            this.InstructionsCode={
+                '000mm':{
+                    0:['ooooosssddd',(offset,Rs,Rd)=>`LSL  ${Regs(Rd)},${Regs(Rs)},#${offset}`,genthumb('LSL','ORR',(o,Rs,Rd)=>`0b00000${b2(o,5)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    1:['ooooosssddd',(offset,Rs,Rd)=>`LSR  ${Regs(Rd)},${Regs(Rs)},#${offset}`,genthumb('LSR','ORR',(o,Rs,Rd)=>`0b00001${b2(o,5)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    2:['ooooosssddd',(offset,Rs,Rd)=>`ASR  ${Regs(Rd)},${Regs(Rs)},#${offset}`,genthumb('ASR','ORR',(o,Rs,Rd)=>`0b00010${b2(o,5)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    3:{
+                        'mm':{
+                            0:['nnnsssddd',(Rn,Rs,Rd)=>`ADD  ${Regs(Rd)},${Regs(Rs)},${Regs(Rn)}`,genthumb('ADD','RRR',(Rn,Rs,Rd)=>`0b0001100${b2(Rn,3)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            1:['nnnsssddd',(Rn,Rs,Rd)=>`SUB  ${Regs(Rd)},${Regs(Rs)},${Regs(Rn)}`,genthumb('SUB','RRR',(Rn,Rs,Rd)=>`0b0001101${b2(Rn,3)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            2:['ooosssddd',(Rn,Rs,Rd)=>`ADD  ${Regs(Rd)},${Regs(Rs)},#${Rn}`,genthumb('ADD','ORR',(o,Rs,Rd)=>`0b0001110${b2(o,3)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            3:['ooosssddd',(Rn,Rs,Rd)=>`SUB  ${Regs(Rd)},${Regs(Rs)},#${Rn}`,genthumb('SUB','ORR',(o,Rs,Rd)=>`0b0001111${b2(o,3)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                        }
+                    },
+                },
+                '001mm':{
+                    0:['dddoooooooo',(Rd,offset)=>`MOV  ${Regs(Rd)},#${offset}`,genthumb('MOV','OR',(o,Rd)=>`0b00100${b2(Rd,3)}${b2(o,8)}`|0)],
+                    1:['dddoooooooo',(Rd,offset)=>`CMP  ${Regs(Rd)},#${offset}`,genthumb('CMP','OR',(o,Rd)=>`0b00101${b2(Rd,3)}${b2(o,8)}`|0)],
+                    2:['dddoooooooo',(Rd,offset)=>`ADD  ${Regs(Rd)},#${offset}`,genthumb('ADD','OR',(o,Rd)=>`0b00110${b2(Rd,3)}${b2(o,8)}`|0)],
+                    3:['dddoooooooo',(Rd,offset)=>`SUB  ${Regs(Rd)},#${offset}`,genthumb('SUB','OR',(o,Rd)=>`0b00111${b2(Rd,3)}${b2(o,8)}`|0)],
+                },
+                '0100mm':{
+                    0:{
+                        'mmmm':{
+                            0: ['sssddd',(Rs,Rd)=>`AND  ${Regs(Rd)},${Regs(Rs)}`,genthumb('AND','RR',(Rs,Rd)=>`0b010000${b2( 0,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            1: ['sssddd',(Rs,Rd)=>`EOR  ${Regs(Rd)},${Regs(Rs)}`,genthumb('EOR','RR',(Rs,Rd)=>`0b010000${b2( 1,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            2: ['sssddd',(Rs,Rd)=>`LSL  ${Regs(Rd)},${Regs(Rs)}`,genthumb('LSL','RR',(Rs,Rd)=>`0b010000${b2( 2,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            3: ['sssddd',(Rs,Rd)=>`LSR  ${Regs(Rd)},${Regs(Rs)}`,genthumb('LSR','RR',(Rs,Rd)=>`0b010000${b2( 3,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            4: ['sssddd',(Rs,Rd)=>`ASR  ${Regs(Rd)},${Regs(Rs)}`,genthumb('ASR','RR',(Rs,Rd)=>`0b010000${b2( 4,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            5: ['sssddd',(Rs,Rd)=>`ADC  ${Regs(Rd)},${Regs(Rs)}`,genthumb('ADC','RR',(Rs,Rd)=>`0b010000${b2( 5,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            6: ['sssddd',(Rs,Rd)=>`SBC  ${Regs(Rd)},${Regs(Rs)}`,genthumb('SBC','RR',(Rs,Rd)=>`0b010000${b2( 6,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            7: ['sssddd',(Rs,Rd)=>`ROR  ${Regs(Rd)},${Regs(Rs)}`,genthumb('ROR','RR',(Rs,Rd)=>`0b010000${b2( 7,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            8: ['sssddd',(Rs,Rd)=>`TST  ${Regs(Rd)},${Regs(Rs)}`,genthumb('TST','RR',(Rs,Rd)=>`0b010000${b2( 8,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            9: ['sssddd',(Rs,Rd)=>`NEG  ${Regs(Rd)},${Regs(Rs)}`,genthumb('NEG','RR',(Rs,Rd)=>`0b010000${b2( 9,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            10:['sssddd',(Rs,Rd)=>`CMP  ${Regs(Rd)},${Regs(Rs)}`,genthumb('CMP','RR',(Rs,Rd)=>`0b010000${b2(10,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            11:['sssddd',(Rs,Rd)=>`CMN  ${Regs(Rd)},${Regs(Rs)}`,genthumb('CMN','RR',(Rs,Rd)=>`0b010000${b2(11,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            12:['sssddd',(Rs,Rd)=>`ORR  ${Regs(Rd)},${Regs(Rs)}`,genthumb('ORR','RR',(Rs,Rd)=>`0b010000${b2(12,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            13:['sssddd',(Rs,Rd)=>`MUL  ${Regs(Rd)},${Regs(Rs)}`,genthumb('MUL','RR',(Rs,Rd)=>`0b010000${b2(13,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            14:['sssddd',(Rs,Rd)=>`BIC  ${Regs(Rd)},${Regs(Rs)}`,genthumb('BIC','RR',(Rs,Rd)=>`0b010000${b2(14,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            15:['sssddd',(Rs,Rd)=>`MVN  ${Regs(Rd)},${Regs(Rs)}`,genthumb('MVN','RR',(Rs,Rd)=>`0b010000${b2(15,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                        }
+                    },
+                    1:{
+                        'mm':{
+                            0: ['hssssddd',(h,Rs,Rd)=>`ADD  ${Regs(Rd+h*8)},${Regs(Rs)}`,genthumb('ADD','RR',(Rs,Rd)=>`0b01000100${b2(((Rd&0x8)!=0)|0,1)}${b2(Rs,4)}${b2(Rd,3)}`|0)],
+                            1: ['hssssddd',(h,Rs,Rd)=>`CMP  ${Regs(Rd+h*8)},${Regs(Rs)}`,genthumb('CMP','RR',(Rs,Rd)=>((Rd<8&&Rs<8)?(`0b010000${b2(10,4)}${b2(Rs,3)}${b2(Rd,3)}`):(`0b01000101${b2(((Rd&0x8)!=0)|0,1)}${b2(Rs,4)}${b2(Rd,3)}`))|0)],
+                            2: ['hssssddd',(h,Rs,Rd)=>`MOV  ${Regs(Rd+h*8)},${Regs(Rs)}`,genthumb('MOV','RR',(Rs,Rd)=>`0b01000110${b2(((Rd&0x8)!=0)|0,1)}${b2(Rs,4)}${b2(Rd,3)}`|0)],
+                            3: {
+                                'm':{
+                                    0:['ssssddd',(Rs,Rd)=>`BX    ${Regs(Rs)}`,genthumb('BX' ,'R',(Rs)=>`0b010001110${b2(Rs,4)}000`|0)],
+                                    1:['ssssddd',(Rs,Rd)=>`BLX   ${Regs(Rs)}`,genthumb('BLX','R',(Rs)=>`0b010001111${b2(Rs,4)}000`|0)],
+                                }
+                            },
+                        }
+                    },
+                    2:['ddoooooooo',(Rd,offset)=>`LDR  ${Regs(Rd)},[PC, #${(this.lastAddr=offset*4)}]  ;@PC+ADDR`,genthumb('LDR','OPR',(o,Rb,Rd)=>`0b01001${b2(Rd,3)}${b2(o>>2,8)}`|0)],
+                    3:['ddoooooooo',(Rd,offset)=>`LDR  ${Regs(Rd+4)},[PC, #${(this.lastAddr=offset*4)}]  ;@PC+ADDR`],
+                },
+                '0101mmm':{
+                    6:['ooobbbddd',(Ro,Rb,Rd)=>`LDRB ${Regs(Rd)},[${Regs(Rb)},${Regs(Ro)}]`,genthumb('LDRB','RRR',(Ro,Rb,Rd)=>`0b0101${b2(6,3)}${b2(Ro,3)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+                    4:['ooobbbddd',(Ro,Rb,Rd)=>`LDR  ${Regs(Rd)},[${Regs(Rb)},${Regs(Ro)}]`,genthumb('LDR' ,'RRR',(Ro,Rb,Rd)=>`0b0101${b2(4,3)}${b2(Ro,3)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+                    2:['ooobbbddd',(Ro,Rb,Rd)=>`STRB ${Regs(Rd)},[${Regs(Rb)},${Regs(Ro)}]`,genthumb('STRB','RRR',(Ro,Rb,Rd)=>`0b0101${b2(2,3)}${b2(Ro,3)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+                    0:['ooobbbddd',(Ro,Rb,Rd)=>`STR  ${Regs(Rd)},[${Regs(Rb)},${Regs(Ro)}]`,genthumb('STR' ,'RRR',(Ro,Rb,Rd)=>`0b0101${b2(0,3)}${b2(Ro,3)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+                    7:['ooobbbddd',(Ro,Rb,Rd)=>`LDSH ${Regs(Rd)},[${Regs(Rb)},${Regs(Ro)}]`,genthumb('LDSH','RRR',(Ro,Rb,Rd)=>`0b0101${b2(7,3)}${b2(Ro,3)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+                    3:['ooobbbddd',(Ro,Rb,Rd)=>`LDSB ${Regs(Rd)},[${Regs(Rb)},${Regs(Ro)}]`,genthumb('LDSB','RRR',(Ro,Rb,Rd)=>`0b0101${b2(3,3)}${b2(Ro,3)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+                    5:['ooobbbddd',(Ro,Rb,Rd)=>`LDRH ${Regs(Rd)},[${Regs(Rb)},${Regs(Ro)}]`,genthumb('LDRH','RRR',(Ro,Rb,Rd)=>`0b0101${b2(5,3)}${b2(Ro,3)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+                    1:['ooobbbddd',(Ro,Rb,Rd)=>`STRH ${Regs(Rd)},[${Regs(Rb)},${Regs(Ro)}]`,genthumb('STRH','RRR',(Ro,Rb,Rd)=>`0b0101${b2(1,3)}${b2(Ro,3)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+                },
+                '011mm':{
+                    3:['ooooobbbddd',(offset,Rb,Rd)=>`LDRB ${Regs(Rd)},[${Regs(Rb)},#${offset}]`    ,genthumb('LDRB','ORR',(o,Rb,Rd)=>`0b011${b2(3,2)}${b2(o,5)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+                    1:['ooooobbbddd',(offset,Rb,Rd)=>`LDR  ${Regs(Rd)},[${Regs(Rb)},#${offset*4}]`  ,genthumb('LDR' ,'ORR',(o,Rb,Rd)=>`0b011${b2(1,2)}${b2(o>>2,5)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+                    0:['ooooobbbddd',(offset,Rb,Rd)=>`STR  ${Regs(Rd)},[${Regs(Rb)},#${offset*4}]`  ,genthumb('STR' ,'ORR',(o,Rb,Rd)=>`0b011${b2(0,2)}${b2(o>>2,5)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+                    2:['ooooobbbddd',(offset,Rb,Rd)=>`STRB ${Regs(Rd)},[${Regs(Rb)},#${offset}]`    ,genthumb('STRB','ORR',(o,Rb,Rd)=>`0b011${b2(2,2)}${b2(o,5)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+                },
+                '100mm':{
+                    0:['ooooobbbddd',(offset,Rb,Rd)=>`STRH ${Regs(Rd)},[${Regs(Rb)},#${offset*2}]`,genthumb('STRH','ORR',(o,Rb,Rd)=>`0b100${b2(0,2)}${b2(o>>1,5)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+                    1:['ooooobbbddd',(offset,Rb,Rd)=>`LDRH ${Regs(Rd)},[${Regs(Rb)},#${offset*2}]`,genthumb('LDRH','ORR',(o,Rb,Rd)=>`0b100${b2(1,2)}${b2(o>>1,5)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+                    2:['dddoooooooo',   (Rd,offset)=>`STR  ${Regs(Rd)},[SP,#${offset*4}]`         ,genthumb('STR','OSR',(o,Rb,Rd)=>`0b100${b2(2,2)}${b2(Rd,3)}${b2(o>>2,8)}`|0)],
+                    3:['dddoooooooo',   (Rd,offset)=>`LDR  ${Regs(Rd)},[SP,#${offset*4}]`         ,genthumb('LDR','OSR',(o,Rb,Rd)=>`0b100${b2(3,2)}${b2(Rd,3)}${b2(o>>2,8)}`|0)],
+                },
+                '1010m':{
+                    0:['dddoooooooo',(Rd,offset)=>`ADD  ${Regs(Rd)},[PC,#${offset*4}]`,genthumb('ADD','OPR',(o,Rb,Rd)=>`0b10100${b2(Rd,3)}${b2(o>>2,8)}`|0)],
+                    1:['dddoooooooo',(Rd,offset)=>`ADD  ${Regs(Rd)},[SP,#${offset*4}]`,genthumb('ADD','OSR',(o,Rb,Rd)=>`0b10101${b2(Rd,3)}${b2(o>>2,8)}`|0)],
+                },
+                '1011mmmm':{
+                    0:{
+                        'm':{
+                            0:['ooooooo',(offset)=>`ADD  SP,#${(offset*4)}`,genthumb('ADD','OS',(o,Rd)=>`0b1011${b2(0,4)}0${b2(o>>2,7)}`|0)],
+                            1:['ooooooo',(offset)=>`SUB  SP,#${(offset*4)}`,genthumb('SUB','OS',(o,Rd)=>`0b1011${b2(0,4)}1${b2(o>>2,7)}`|0)],
+                        }
+                    },
+                    2:{
+                        'mm':{
+                            0:['sssddd',(Rs,Rd)=>`SXTH ${Regs(Rd)}, ${Regs(Rs)}`,genthumb('SXTH','RR',(Rs,Rd)=>`0b1011${b2(2,4)}${b2(0,2)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            1:['sssddd',(Rs,Rd)=>`SXTB ${Regs(Rd)}, ${Regs(Rs)}`,genthumb('SXTB','RR',(Rs,Rd)=>`0b1011${b2(2,4)}${b2(1,2)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            2:['sssddd',(Rs,Rd)=>`UXTH ${Regs(Rd)}, ${Regs(Rs)}`,genthumb('UXTH','RR',(Rs,Rd)=>`0b1011${b2(2,4)}${b2(2,2)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                            3:['sssddd',(Rs,Rd)=>`UXTB ${Regs(Rd)}, ${Regs(Rs)}`,genthumb('UXTB','RR',(Rs,Rd)=>`0b1011${b2(2,4)}${b2(3,2)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                        }
+                    },
+                    4: ['rrrrrrrr',(r)=>`PUSH {${r&0x80 && 'R7,' || ''}${r&0x40 && 'R6,' || ''}${r&0x20 && 'R5,' || ''}${r&0x10 && 'R4,' || ''}${r&0x8 && 'R3,' || ''}${r&0x4 && 'R2,' || ''}${r&0x2 && 'R1,' || ''}${r&0x1 && 'R0,' || ''}}`.replace(',}','}'),genthumb('PUSH','A',(Rlist)=>`0b1011010${b2(((Rlist&0x100)!=0)|0,1)}${b2(Rlist&0xff,8)}`|0)],
+                    5: ['rrrrrrrr',(r)=>`PUSH {${r&0x80 && 'R7,' || ''}${r&0x40 && 'R6,' || ''}${r&0x20 && 'R5,' || ''}${r&0x10 && 'R4,' || ''}${r&0x8 && 'R3,' || ''}${r&0x4 && 'R2,' || ''}${r&0x2 && 'R1,' || ''}${r&0x1 && 'R0,' || ''}LR}`],
+                    10:{
+                        'mm':{
+                            0:['sssddd',(Rs,Rd)=>`REV  ${Regs(Rd)}, ${Regs(Rs)}`,genthumb('REV','RR',(Rs,Rd)=>`0b1011${b2(10,4)}${b2(0,2)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                        }
+                    },
+                    12: ['rrrrrrrr',(r)=>`POP  {${r&0x80 && 'R7,' || ''}${r&0x40 && 'R6,' || ''}${r&0x20 && 'R5,' || ''}${r&0x10 && 'R4,' || ''}${r&0x8 && 'R3,' || ''}${r&0x4 && 'R2,' || ''}${r&0x2 && 'R1,' || ''}${r&0x1 && 'R0,' || ''}}`.replace(',}','}'),genthumb('POP','A',(Rlist)=>`0b1011110${b2(((Rlist&0x200)!=0)|0,1)}${b2(Rlist&0xff,8)}`|0)],
+                    13: ['rrrrrrrr',(r)=>`POP  {${r&0x80 && 'R7,' || ''}${r&0x40 && 'R6,' || ''}${r&0x20 && 'R5,' || ''}${r&0x10 && 'R4,' || ''}${r&0x8 && 'R3,' || ''}${r&0x4 && 'R2,' || ''}${r&0x2 && 'R1,' || ''}${r&0x1 && 'R0,' || ''}PC}`],
+                    14: ['oooooooo',(o)=>`BKPT #${o}`,genthumb('BKPT','O',(o)=>`0b1011${b2(14,4)}${b2(o,8)}`|0)],
+                    15: ['oooooooo',(o)=>((o==0x20)?`WFE`:(o==0x30)?`WFI`:`NOP`),genthumb('WFE','',(o)=>`0b1011${b2(15,4)}${b2(0x20,8)}`|0),genthumb('WFI','',(o)=>`0b1011${b2(15,4)}${b2(0x30,8)}`|0),genthumb('NOP','',(o)=>`0b1011${b2(15,4)}${b2(0,8)}`|0)],
+                },
+                '1100m':{
+                    0:['bbboooooooo',(Rb,r)=>`STM  ${Regs(Rb)}!,{${r&0x80 && 'R7,' || ''}${r&0x40 && 'R6,' || ''}${r&0x20 && 'R5,' || ''}${r&0x10 && 'R4,' || ''}${r&0x8 && 'R3,' || ''}${r&0x4 && 'R2,' || ''}${r&0x2 && 'R1,' || ''}${r&0x1 && 'R0,' || ''}}`.replace(',}','}'),genthumb('STM','AR',(Rlist,Rb)=>`0b11000${b2(Rb,3)}${b2(Rlist&0xff,8)}`|0)],
+                    1:['bbboooooooo',(Rb,r)=>`LDM  ${Regs(Rb)}!,{${r&0x80 && 'R7,' || ''}${r&0x40 && 'R6,' || ''}${r&0x20 && 'R5,' || ''}${r&0x10 && 'R4,' || ''}${r&0x8 && 'R3,' || ''}${r&0x4 && 'R2,' || ''}${r&0x2 && 'R1,' || ''}${r&0x1 && 'R0,' || ''}}`.replace(',}','}'),genthumb('LDM','AR',(Rlist,Rb)=>`0b11001${b2(Rb,3)}${b2(Rlist&0xff,8)}`|0)],
+                },
+                '1101mmmm':{
+                    0: ['oooooooo',(offset)=>Bcond(0,offset) ,genthumb('BEQ','O',(o)=>`0b1101${b2( 0,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+                    1: ['oooooooo',(offset)=>Bcond(1,offset) ,genthumb('BNE','O',(o)=>`0b1101${b2( 1,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+                    2: ['oooooooo',(offset)=>Bcond(2,offset) ,genthumb('BCS','O',(o)=>`0b1101${b2( 2,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+                    3: ['oooooooo',(offset)=>Bcond(3,offset) ,genthumb('BCC','O',(o)=>`0b1101${b2( 3,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+                    4: ['oooooooo',(offset)=>Bcond(4,offset) ,genthumb('BMI','O',(o)=>`0b1101${b2( 4,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+                    5: ['oooooooo',(offset)=>Bcond(5,offset) ,genthumb('BPL','O',(o)=>`0b1101${b2( 5,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+                    6: ['oooooooo',(offset)=>Bcond(6,offset) ,genthumb('BVS','O',(o)=>`0b1101${b2( 6,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+                    7: ['oooooooo',(offset)=>Bcond(7,offset) ,genthumb('BVC','O',(o)=>`0b1101${b2( 7,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+                    8: ['oooooooo',(offset)=>Bcond(8,offset) ,genthumb('BHI','O',(o)=>`0b1101${b2( 8,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+                    9: ['oooooooo',(offset)=>Bcond(9,offset) ,genthumb('BLS','O',(o)=>`0b1101${b2( 9,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+                    10:['oooooooo',(offset)=>Bcond(10,offset),genthumb('BGE','O',(o)=>`0b1101${b2(10,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+                    11:['oooooooo',(offset)=>Bcond(11,offset),genthumb('BLT','O',(o)=>`0b1101${b2(11,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+                    12:['oooooooo',(offset)=>Bcond(12,offset),genthumb('BGT','O',(o)=>`0b1101${b2(12,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+                    13:['oooooooo',(offset)=>Bcond(13,offset),genthumb('BLE','O',(o)=>`0b1101${b2(13,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+                    15:['oooooooo',(offset)=>`SWI  ${offset}`,genthumb('SWI','O',(o)=>`0b1101${b2(15,4)}${b2(o&0xff,8)}`|0)],
+                },
+                '1110m':{
+                    0:['ooooooooooo',(offset)=>`B    ${offset&0x400?(this.lastAddr=(((offset|~0x7ff)<<1)+4)):(this.lastAddr=((offset<<1)+4))}  ;@PC+BL`,genthumb('B','O',(o)=>`0b11100${b2(((o>>1)-2)&0x7ff,11)}`|0)],
+                },
+                //'1111':['hooooooooooo',(h,offset)=>`${h && ('BL    '+(lastAddr&0x0400?((((offset<<1)+(lastAddr<<12))|-1^(1<<23)-1)+2):2+((offset<<1)+(lastAddr<<12)))) || (';'+(lastAddr=offset)) }`]
+                '1111m':{
+                    0:['ooooooooooo',(offset)=>`;${(this.lastAddr=offset)}`],
+                    1:['ooooooooooo',(offset)=>'BL   '+(this.lastAddr&0x0400?(this.lastAddr=((((offset<<1)+(this.lastAddr<<12))|-1^(1<<23)-1)+2)):(this.lastAddr=(2+((offset<<1)+(this.lastAddr<<12)))))+'  ;@PC+BL',genthumb('BL','O',(o)=>`0b11110${b2((((o>>1)-1)>>11)&0x7ff,11)}11111${b2(((o>>1)-1)&0x7ff,11)}`|0)],
+                }
+                //['hooooooooooo',(h,offset)=>`${h && ('BL    '+(lastAddr&0x0400?((((offset<<1)+(lastAddr<<12))|-1^(1<<23)-1)+2):2+((offset<<1)+(lastAddr<<12)))) || (';'+(lastAddr=offset)) }`]
+            }
+
+        }
+
+        Hex8(value) {
+            return ('0' + (value&0xff).toString(16).toUpperCase()).slice(-2);
+        }
+        Hex16(value) {
+            return ('000' + (value&0xffff).toString(16).toUpperCase()).slice(-4);
+        }
+        Hex32(value) {
+            return ('0000000' + (value).toString(16).toUpperCase()).slice(-8);
+        }
+        
+
+        /**
+         * 从值中提取指定位模式的各个字段
+         * @param {number} val - 要提取的值
+         * @param {string} bitformat - 位模式字符串(如'ooosssddd')
+         * @return {Array|null} 提取的字段数组或null(不匹配时)
+         */
+        bits(val, bitformat) {
+            let lastchar = '';
+            let v = 0;
+            let vals = [];
+            let arg = false;
+            
+            // 遍历位模式字符串
+            for (let i = 0; i < bitformat.length; i++) {
+                const c = bitformat[i];
+                val <<= 1;
+                
+                // 检查固定位
+                if (c === '0' || c === '1') {
+                    if (c === '0' && !(val & 0x10000)) continue;
+                    if (c === '1' && (val & 0x10000)) continue;
+                    return null; // 不匹配
+                }
+                
+                // 处理变化位
+                if (c !== lastchar) {
+                    vals.push(v);
+                    lastchar = c;
+                    v = 0;
+                    arg = true;
+                }
+                v <<= 1;
+                v |= (val & 0x10000) != 0;
+            }
+            
+            if (arg) vals.push(v);
+            vals[0] = val & 0xffff; // 原始值
+            return vals;
+        }
+
+        /**
+         * 将Thumb汇编指令编码为机器码
+         * @param {string} code - 汇编指令字符串
+         * @return {Array|null} [机器码, 助记符, 操作数] 或 null(无效指令时)
+         */
+        encodeThumb(code) {
+            // 处理标签和注释
+            if (code.includes(':')) {
+                code = code.split(':')[1];
+            }
+            
+            // 清理代码: 去除注释、空格、统一大小写、移除括号
+            const cleanCode = code.split(';')[0].trim().toUpperCase().replaceAll('[', '').replaceAll(']', '');
+            if (!cleanCode) return null; // 空行或只有注释
+            
+            // 分割助记符和操作数
+            const parts = cleanCode.split(/\s+/);
+            const mnemonic = parts[0];
+            const args = parts.slice(1).join('');
+            const operands = args.includes('{') ? 
+                args.split('!').map(op => op.replace(',{', '{')) : 
+                args.split(',').map(op => op.trim());
+            
+            // 处理DCW伪指令
+            if (mnemonic === 'DCW') {
+                return [parseInt(operands[0], 16), 'DWC', [parseInt(operands[0], 16)]];
+            }
+            
+            // 特殊指令处理(支持全寄存器)
+            const FULL_REG_INSTRUCTIONS = new Set(['MOV', 'CMP', 'ADD', 'SUB', 'BX', 'BLX']);
+            const isFullRegInstruction = FULL_REG_INSTRUCTIONS.has(mnemonic);
+            
+            // 生成操作数模式字符串并解析操作数
+            let pattern = '';
+            const parsedOperands = [];
+            
+            if (args.length > 0) {
+                for (const op of operands) {
+                    // 寄存器处理
+                    if (/^R([0-9]|1[0-5])$/.test(op)) {
+                        let rs = parseInt(op.substring(1));
+                        if (rs > 7) {
+                            pattern = 'H' + pattern; // 高寄存器
+                        } else {
+                            pattern = 'R' + pattern; // 普通寄存器
+                        }
+                        parsedOperands.unshift(rs);
+                    } 
+                    // 特殊寄存器处理
+                    else if (op === 'SP') {
+                        pattern = 'S' + pattern;
+                        parsedOperands.unshift(13);
+                    } else if (op === 'LR') {
+                        pattern = 'L' + pattern;
+                        parsedOperands.unshift(14);
+                    } else if (op === 'PC') {
+                        pattern = 'P' + pattern;
+                        parsedOperands.unshift(15);
+                    } 
+                    // 立即数处理
+                    else if (op.startsWith('#')) {
+                        pattern = 'O' + pattern;
+                        parsedOperands.unshift(parseInt(op.substring(1)));
+                    } 
+                    // 寄存器列表处理
+                    else if (op.startsWith('{') && op.endsWith('}')) {
+                        pattern = 'A' + pattern;
+                        const regs = op.slice(1, -1).split(',');
+                        let mask = 0;
+                        for (const r of regs) {
+                            const reg = r.trim();
+                            if (reg === 'LR') mask |= 0x100;
+                            else if (reg === 'PC') mask |= 0x200;
+                            else if (reg.startsWith('R')) {
+                                const num = parseInt(reg.substring(1));
+                                mask |= (1 << num);
+                            }
+                        }
+                        parsedOperands.unshift(mask);
+                    } 
+                    // 数字处理
+                    else if (parseInt(op) + Number.MAX_VALUE) {
+                        pattern = 'O' + pattern;
+                        parsedOperands.unshift(parseInt(op));
+                    } 
+                    // 无效操作数处理
+                    else {
+                        parsedOperands.push(op);
+                        return [null, mnemonic, parsedOperands];
+                    }
+                }
+            }
+            
+            // 查找匹配的指令生成器
+            if (!this.thumbgenMap[mnemonic] || !this.thumbgenMap[mnemonic][pattern]) {
+                if (isFullRegInstruction) {
+                    // 尝试将特殊寄存器转换为普通寄存器模式
+                    pattern = pattern.replaceAll('S', 'R').replaceAll('P', 'R')
+                                .replaceAll('L', 'R').replaceAll('H', 'R');
+                    if (!this.thumbgenMap[mnemonic] || !this.thumbgenMap[mnemonic][pattern]) {
+                        throw new Error(`No matching instruction pattern for ${mnemonic} with operands ${pattern}`);
+                    }
+                } else {
+                    throw new Error(`No matching instruction pattern for ${mnemonic} with operands ${pattern}`);
+                }
+            }
+            
+            // 调用生成器函数并返回结果
+            return [this.thumbgenMap[mnemonic][pattern](...parsedOperands), mnemonic, parsedOperands];
+        }
+        
+        /**
+         * 解析汇编代码并生成机器码
+         * @param {string} asm - 汇编代码字符串
+         * @param {boolean} advaddr - 是否处理标签和地址
+         * @return {Array} 生成的机器码字节数组
+         */
+        parseASM(asm, advaddr = true) {
+            let data = [];
+            let asmline = asm.split('\n');
+            
+            // 地址和标签处理
+            if (advaddr) {
+                let addrmap = {};
+                let bmap = [];
+                let nullline = [];
+                let addr = 0;
+                const labeltype = new Set(['BIC', 'BKPT', 'BX', 'BLX']);
+                
+                // 第一遍扫描: 收集标签地址
+                for (let i = 0; i < asmline.length; i++) {
+                    const code = asmline[i];
+                    if (code.includes(':')) {
+                        addrmap[code.split(':')[0].trim()] = addr;
+                    }
+                    
+                    const e = this.encodeThumb(code);
+                    if (e != null) {
+                        const v = e[0];
+                        if (e[1] == 'BL') addr += 2; // BL指令占4字节
+                        if (e[1][0] == 'B') { // 分支指令
+                            if (!labeltype.has(e[1])) {
+                                bmap.push([i, e[2][0], addr, code]);
+                            }
+                        }
+                        addr += 2;
+                    } else {
+                        nullline.push(i);
+                    }
+                }
+                
+                // 替换分支目标为计算后的偏移量
+                for (let i = 0; i < bmap.length; i++) {
+                    const e = bmap[i];
+                    asmline[e[0]] = asmline[e[0]].replace(e[1], `${addrmap[e[1]] - e[2]}`);
+                }
+                
+                // 移除空行
+                nullline.map(x => (asmline[x] = ''));
+            }
+            
+            // 辅助函数: 写入16位值
+            function w16(b) {
+                data.push(b & 0xff);
+                data.push((b >> 8) & 0xff);
+            }
+            
+            // 第二遍扫描: 生成机器码
+            asmline.map(x => {
+                let e = this.encodeThumb(x);
+                if (e != null) {
+                    const v = e[0];
+                    if ((v & 0xf800) == 0xF800) w16(v >> 16); // 32位指令前半部分
+                    w16(v & 0xffff); // 16位指令或32位指令后半部分
+                }
+            });
+            
+            return data;
+        }
+
+        /**
+         * 递归解码机器码
+         * @param {Object} tab - 指令表
+         * @param {number} vals - 机器码值
+         * @param {number} org - 原始地址
+         * @return {string} 解码后的汇编指令
+         */
+        decodeThumb(tab, vals, org = 0) {
+            if (tab == null) {
+                return `DCW  ${this.Hex16(org)}  ;not found`;
+            }
+            
+            const keys = Object.keys(tab);
+            for (let i = 0; i < keys.length; i++) {
+                const key = keys[i];
+                let v = this.bits(vals, key);
+                if (!v) continue;
+                
+                let next = tab[key][v[1]];
+                if (Array.isArray(next)) {
+                    v = this.bits(v[0], next[0]);
+                    const call = next[1];
+                    
+                    // 根据参数数量调用不同的解码函数
+                    switch (v.length) {
+                        case 2: return call(v[1]);
+                        case 3: return call(v[1], v[2]);
+                        case 4: return call(v[1], v[2], v[3]);
+                    }
+                    return null;
+                } else {
+                    return this.decodeThumb(next, v[0], vals);
+                }
+            }
+        }
+
+        /**
+         * 将Thumb机器码反汇编为汇编代码
+         * @param {Array|ArrayBuffer} bin - 机器码字节数组
+         * @param {boolean} addrview - 是否显示地址
+         * @param {boolean} jmpfix - 是否修复跳转标签
+         * @return {string} 反汇编结果
+         */
+        parseThumb(bin, addrview = false, jmpfix = true) {
+            let asm = [];
+            let addr = 0;
+            const addrindex=Object.values(this.AddrName).indexOf('__Vectors');
+            let base = addrindex>=0?Object.keys(this.AddrName)[addrindex]|0:this.baseAddr; // 默认基地址
+            let dv = new DataView(new Uint8Array(bin).buffer);
+            let count = bin.length;
+            let dcw = []; // 需要作为数据处理的地址
+            let qjmp = new Set(); // 跳转目标地址
+            
+            const toHex32 = this.Hex32;
+            
+            // 遍历机器码
+            while (count >= 2) {
+                const code = dv.getUint16(addr, true);
+                
+                // 处理数据字
+                if (dcw.includes(addr)) {
+                    asm.push(addrview ? 
+                        `:${toHex32(base + addr)} ${toHex32(code).substring(4)}  DCW  ${toHex32(code).substring(4)}` : 
+                        `DCW  ${toHex32(code).substring(4)}`);
+                    dcw.splice(dcw.indexOf(addr), 1);
+                } 
+                // 处理指令
+                else {
+                    const asmv = this.decodeThumb(this.InstructionsCode, code);
+                    const lastAddr = this.lastAddr;
+                    
+                    let asmv2 = addrview ? 
+                        `:${toHex32(base + addr)} ${toHex32(code).substring(4)}  ${asmv}` : 
+                        `${asmv}`;
+                    
+                    // 处理特殊地址引用
+                    if (asmv2.includes(';')) {
+                        let vaddr;
+                        switch (asmv2.split('@')[1]) {
+                            case 'PC+ADDR': // PC相对地址加载
+                                vaddr = (addr + lastAddr + 4) & ~2;
+                                dcw.push(vaddr);
+                                dcw.push(vaddr + 2);
+                                asmv2 = asmv2.replace('PC+ADDR', 
+                                    `0x${toHex32(base + vaddr)}=0x${
+                                        (vaddr + 4 <= bin.length) && toHex32(dv.getUint32(vaddr, true)) || '????????'
+                                    }`);
+                                break;
+                                
+                            case 'PC+BL': // 分支链接指令
+                                if (jmpfix) {
+                                    if ((addr + lastAddr) >= 0 && (addr + lastAddr) < bin.length) {
+                                        asmv2 = `${asmv2.split(' ')[0]} Q${toHex32(base + addr + lastAddr)}  ;${
+                                            asmv2.split(';')[0].trim()
+                                        }->0x${toHex32(base + addr + lastAddr)} ${
+                                            this.AddrName[base + addr + lastAddr] || ''
+                                        }`;
+                                        qjmp.add((addr + lastAddr) >> 1);
+                                    } else {
+                                        asmv2 = addrview ? 
+                                            `:${toHex32(base + addr)} ${toHex32(code).substring(4)}  DCW  ${toHex32(code).substring(4)}` : 
+                                            `DCW  ${toHex32(code).substring(4)}`;
+                                    }
+                                } else {
+                                    asmv2 = asmv2.replace('PC+BL', `0x${toHex32(base + addr + lastAddr)}`);
+                                }
+                                break;
+                                
+                            case 'PC+B': // 分支指令
+                                if (jmpfix) {
+                                    if ((addr + lastAddr) >= 0 && (addr + lastAddr) < bin.length) {
+                                        asmv2 = `${asmv2.split(' ')[0]} Q${toHex32(base + addr + lastAddr)}  ;${
+                                            asmv2.split(';')[0].trim()
+                                        }->0x${toHex32(base + addr + lastAddr)} ${
+                                            this.AddrName[base + addr + lastAddr] || ''
+                                        }`;
+                                        qjmp.add((addr + lastAddr) >> 1);
+                                    } else {
+                                        asmv2 = addrview ? 
+                                            `:${toHex32(base + addr)} ${toHex32(code).substring(4)}  DCW  ${toHex32(code).substring(4)}` : 
+                                            `DCW  ${toHex32(code).substring(4)}`;
+                                    }
+                                } else {
+                                    asmv2 = asmv2.replace('PC+B', `0x${toHex32(base + addr + lastAddr)}`);
+                                }
+                                break;
+                        }
+                    }
+                    asm.push(asmv2);
+                }
+                
+                addr += 2;
+                count -= 2;
+            }
+            
+            // 添加跳转标签
+            if (jmpfix) {
+                Array.from(qjmp).map(x => 
+                    asm[x] = `Q${toHex32(base + (x << 1))}:${
+                        (this.AddrName[base + (x << 1)] ? '     ;' + this.AddrName[base + (x << 1)] : '')
+                    }\n` + asm[x]);
+            }
+            
+            return asm.join('\n').replaceAll(';0\n', '');
+        }
+
+    }
+
+
+    
+    var thumbhandle=new ThumbM0();
+
+
+    function toASM(){
+        if(rom){
+            console.log(outputDiv.innerText=lastasm=thumbhandle.parseThumb(rom));
+        }
+        else{
+            //dh=new DataHelper(eval(`[${inputDiv.innerText}]`));
+            console.log(outputDiv.innerText=lastasm=thumbhandle.parseThumb(eval(`[${inputDiv.innerText}]`)));
+        }
+    }
+
+    
+    function loadthumb(thumbcode){
+        let code=[]; 
+        for (let i = 0; i < thumbcode.length; i++) {
+            if((i%16)==0)code.push('\n');
+            code.push(`0x${thumbhandle.Hex8(thumbcode[i])},`);
+        }
+        return (inputDiv.innerText=code.join(''));
+    }
+
+    function toThumb(){
+        if(outputDiv.innerText.length>0){
+            let thumbcode=thumbhandle.parseASM(outputDiv.innerText);
+            prerom=rom;
+            loadthumb(rom=thumbcode);
+        }
+    }
+
+
+    function cmprom(ram,rom){
+        for(let i=0;i<ram.length;i++)if(ram[i]!=rom[i]){
+            i|=1;
+            console.log(`${i}:${toHex32((ram[i]<<8)|ram[i-1])}->${toHex32((rom[i]<<8)|rom[i-1])}`);
+            console.log(decode(InstructionsCode,(ram[i]<<8)|ram[i-1]));
+            console.log(decode(InstructionsCode,(rom[i]<<8)|rom[i-1]));
+            break;
+        }
+    }
+/*
+    const bits=(val,bitformat)=>{
+        let lastchar='';
+        let v=0;
+        let vals=[];
+        let arg=false;
+        for (let i = 0; i < bitformat.length; i++) {
+            const c = bitformat[i];
+            val<<=1;
+            if(c==='0' || c==='1'){
+                if(c==='0' && !(val&0x10000))continue;
+                if(c==='1' && (val&0x10000))continue;
+                return null;
+            }
+            if(c!==lastchar){
+                vals.push(v);
+                lastchar=c;
+                v=0;
+                arg=true;
+            }
+            v<<=1;
+            v|=(val&0x10000)!=0;
+        }
+        if(arg)vals.push(v);
+        vals[0]=val&0xffff;
+        return vals;
+    }
+    var thumbgenMap={};
+    const genthumb=(name,req,action)=>{
+        if(!thumbgenMap[name])thumbgenMap[name]={};
+        if(thumbgenMap[name][req])console.log(`rep:${name}:${req}`);
+        
+        thumbgenMap[name][req]=action;
+        return action;
+    }
+    const b2=(x,b)=>`000000000000000${x.toString(2)}`.slice(-b);
+    const Regs=(r)=>r<13 && (r<10 && `R${r} ` || `R${r}`) || (['SP','LR','PC'])[r-13];
+    const fixInt=(n,size=16)=>(n>>(size-1)) && (n-(1<<size)) || n;
+    var lastAddr=0;
+    const Bcond=(b,offset)=>`B${(['EQ','NE','CS','CC','MI','PL','VS','VC','HI','LS','GE','LT','GT','LE'])[b]}  ${offset&0x80?(lastAddr=(((offset|~255)<<1)+4)):(lastAddr=((offset<<1)+4))}  ;@PC+BL`;
+    const InstructionsCode={
+        '000mm':{
+            0:['ooooosssddd',(offset,Rs,Rd)=>`LSL  ${Regs(Rd)},${Regs(Rs)},#${offset}`,genthumb('LSL','ORR',(o,Rs,Rd)=>`0b00000${b2(o,5)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+            1:['ooooosssddd',(offset,Rs,Rd)=>`LSR  ${Regs(Rd)},${Regs(Rs)},#${offset}`,genthumb('LSR','ORR',(o,Rs,Rd)=>`0b00001${b2(o,5)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+            2:['ooooosssddd',(offset,Rs,Rd)=>`ASR  ${Regs(Rd)},${Regs(Rs)},#${offset}`,genthumb('ASR','ORR',(o,Rs,Rd)=>`0b00010${b2(o,5)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+            3:{
+                'mm':{
+                    0:['nnnsssddd',(Rn,Rs,Rd)=>`ADD  ${Regs(Rd)},${Regs(Rs)},${Regs(Rn)}`,genthumb('ADD','RRR',(Rn,Rs,Rd)=>`0b0001100${b2(Rn,3)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    1:['nnnsssddd',(Rn,Rs,Rd)=>`SUB  ${Regs(Rd)},${Regs(Rs)},${Regs(Rn)}`,genthumb('SUB','RRR',(Rn,Rs,Rd)=>`0b0001101${b2(Rn,3)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    2:['ooosssddd',(Rn,Rs,Rd)=>`ADD  ${Regs(Rd)},${Regs(Rs)},#${Rn}`,genthumb('ADD','ORR',(o,Rs,Rd)=>`0b0001110${b2(o,3)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    3:['ooosssddd',(Rn,Rs,Rd)=>`SUB  ${Regs(Rd)},${Regs(Rs)},#${Rn}`,genthumb('SUB','ORR',(o,Rs,Rd)=>`0b0001111${b2(o,3)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                }
+            },
+        },
+        '001mm':{
+            0:['dddoooooooo',(Rd,offset)=>`MOV  ${Regs(Rd)},#${offset}`,genthumb('MOV','OR',(o,Rd)=>`0b00100${b2(Rd,3)}${b2(o,8)}`|0)],
+            1:['dddoooooooo',(Rd,offset)=>`CMP  ${Regs(Rd)},#${offset}`,genthumb('CMP','OR',(o,Rd)=>`0b00101${b2(Rd,3)}${b2(o,8)}`|0)],
+            2:['dddoooooooo',(Rd,offset)=>`ADD  ${Regs(Rd)},#${offset}`,genthumb('ADD','OR',(o,Rd)=>`0b00110${b2(Rd,3)}${b2(o,8)}`|0)],
+            3:['dddoooooooo',(Rd,offset)=>`SUB  ${Regs(Rd)},#${offset}`,genthumb('SUB','OR',(o,Rd)=>`0b00111${b2(Rd,3)}${b2(o,8)}`|0)],
+        },
+        '0100mm':{
+            0:{
+                'mmmm':{
+                    0: ['sssddd',(Rs,Rd)=>`AND  ${Regs(Rd)},${Regs(Rs)}`,genthumb('AND','RR',(Rs,Rd)=>`0b010000${b2( 0,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    1: ['sssddd',(Rs,Rd)=>`EOR  ${Regs(Rd)},${Regs(Rs)}`,genthumb('EOR','RR',(Rs,Rd)=>`0b010000${b2( 1,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    2: ['sssddd',(Rs,Rd)=>`LSL  ${Regs(Rd)},${Regs(Rs)}`,genthumb('LSL','RR',(Rs,Rd)=>`0b010000${b2( 2,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    3: ['sssddd',(Rs,Rd)=>`LSR  ${Regs(Rd)},${Regs(Rs)}`,genthumb('LSR','RR',(Rs,Rd)=>`0b010000${b2( 3,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    4: ['sssddd',(Rs,Rd)=>`ASR  ${Regs(Rd)},${Regs(Rs)}`,genthumb('ASR','RR',(Rs,Rd)=>`0b010000${b2( 4,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    5: ['sssddd',(Rs,Rd)=>`ADC  ${Regs(Rd)},${Regs(Rs)}`,genthumb('ADC','RR',(Rs,Rd)=>`0b010000${b2( 5,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    6: ['sssddd',(Rs,Rd)=>`SBC  ${Regs(Rd)},${Regs(Rs)}`,genthumb('SBC','RR',(Rs,Rd)=>`0b010000${b2( 6,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    7: ['sssddd',(Rs,Rd)=>`ROR  ${Regs(Rd)},${Regs(Rs)}`,genthumb('ROR','RR',(Rs,Rd)=>`0b010000${b2( 7,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    8: ['sssddd',(Rs,Rd)=>`TST  ${Regs(Rd)},${Regs(Rs)}`,genthumb('TST','RR',(Rs,Rd)=>`0b010000${b2( 8,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    9: ['sssddd',(Rs,Rd)=>`NEG  ${Regs(Rd)},${Regs(Rs)}`,genthumb('NEG','RR',(Rs,Rd)=>`0b010000${b2( 9,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    10:['sssddd',(Rs,Rd)=>`CMP  ${Regs(Rd)},${Regs(Rs)}`,genthumb('CMP','RR',(Rs,Rd)=>`0b010000${b2(10,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    11:['sssddd',(Rs,Rd)=>`CMN  ${Regs(Rd)},${Regs(Rs)}`,genthumb('CMN','RR',(Rs,Rd)=>`0b010000${b2(11,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    12:['sssddd',(Rs,Rd)=>`ORR  ${Regs(Rd)},${Regs(Rs)}`,genthumb('ORR','RR',(Rs,Rd)=>`0b010000${b2(12,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    13:['sssddd',(Rs,Rd)=>`MUL  ${Regs(Rd)},${Regs(Rs)}`,genthumb('MUL','RR',(Rs,Rd)=>`0b010000${b2(13,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    14:['sssddd',(Rs,Rd)=>`BIC  ${Regs(Rd)},${Regs(Rs)}`,genthumb('BIC','RR',(Rs,Rd)=>`0b010000${b2(14,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    15:['sssddd',(Rs,Rd)=>`MVN  ${Regs(Rd)},${Regs(Rs)}`,genthumb('MVN','RR',(Rs,Rd)=>`0b010000${b2(15,4)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                }
+            },
+            1:{
+                'mm':{
+                    0: ['hssssddd',(h,Rs,Rd)=>`ADD  ${Regs(Rd+h*8)},${Regs(Rs)}`,genthumb('ADD','RR',(Rs,Rd)=>`0b01000100${b2(((Rd&0x8)!=0)|0,1)}${b2(Rs,4)}${b2(Rd,3)}`|0)],
+                    1: ['hssssddd',(h,Rs,Rd)=>`CMP  ${Regs(Rd+h*8)},${Regs(Rs)}`,genthumb('CMP','RR',(Rs,Rd)=>((Rd<8&&Rs<8)?(`0b010000${b2(10,4)}${b2(Rs,3)}${b2(Rd,3)}`):(`0b01000101${b2(((Rd&0x8)!=0)|0,1)}${b2(Rs,4)}${b2(Rd,3)}`))|0)],
+                    2: ['hssssddd',(h,Rs,Rd)=>`MOV  ${Regs(Rd+h*8)},${Regs(Rs)}`,genthumb('MOV','RR',(Rs,Rd)=>`0b01000110${b2(((Rd&0x8)!=0)|0,1)}${b2(Rs,4)}${b2(Rd,3)}`|0)],
+                    3: {
+                        'm':{
+                            0:['ssssddd',(Rs,Rd)=>`BX    ${Regs(Rs)}`,genthumb('BX' ,'R',(Rs)=>`0b010001110${b2(Rs,4)}000`|0)],
+                            1:['ssssddd',(Rs,Rd)=>`BLX   ${Regs(Rs)}`,genthumb('BLX','R',(Rs)=>`0b010001111${b2(Rs,4)}000`|0)],
+                        }
+                    },
+                }
+            },
+            2:['ddoooooooo',(Rd,offset)=>`LDR  ${Regs(Rd)},[PC, #${(lastAddr=offset*4)}]  ;@PC+ADDR`,genthumb('LDR','OPR',(o,Rb,Rd)=>`0b01001${b2(Rd,3)}${b2(o>>2,8)}`|0)],
+            3:['ddoooooooo',(Rd,offset)=>`LDR  ${Regs(Rd+4)},[PC, #${(lastAddr=offset*4)}]  ;@PC+ADDR`],
+        },
+        '0101mmm':{
+            6:['ooobbbddd',(Ro,Rb,Rd)=>`LDRB ${Regs(Rd)},[${Regs(Rb)},${Regs(Ro)}]`,genthumb('LDRB','RRR',(Ro,Rb,Rd)=>`0b0101${b2(6,3)}${b2(Ro,3)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+            4:['ooobbbddd',(Ro,Rb,Rd)=>`LDR  ${Regs(Rd)},[${Regs(Rb)},${Regs(Ro)}]`,genthumb('LDR' ,'RRR',(Ro,Rb,Rd)=>`0b0101${b2(4,3)}${b2(Ro,3)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+            2:['ooobbbddd',(Ro,Rb,Rd)=>`STRB ${Regs(Rd)},[${Regs(Rb)},${Regs(Ro)}]`,genthumb('STRB','RRR',(Ro,Rb,Rd)=>`0b0101${b2(2,3)}${b2(Ro,3)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+            0:['ooobbbddd',(Ro,Rb,Rd)=>`STR  ${Regs(Rd)},[${Regs(Rb)},${Regs(Ro)}]`,genthumb('STR' ,'RRR',(Ro,Rb,Rd)=>`0b0101${b2(0,3)}${b2(Ro,3)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+            7:['ooobbbddd',(Ro,Rb,Rd)=>`LDSH ${Regs(Rd)},[${Regs(Rb)},${Regs(Ro)}]`,genthumb('LDSH','RRR',(Ro,Rb,Rd)=>`0b0101${b2(7,3)}${b2(Ro,3)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+            3:['ooobbbddd',(Ro,Rb,Rd)=>`LDSB ${Regs(Rd)},[${Regs(Rb)},${Regs(Ro)}]`,genthumb('LDSB','RRR',(Ro,Rb,Rd)=>`0b0101${b2(3,3)}${b2(Ro,3)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+            5:['ooobbbddd',(Ro,Rb,Rd)=>`LDRH ${Regs(Rd)},[${Regs(Rb)},${Regs(Ro)}]`,genthumb('LDRH','RRR',(Ro,Rb,Rd)=>`0b0101${b2(5,3)}${b2(Ro,3)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+            1:['ooobbbddd',(Ro,Rb,Rd)=>`STRH ${Regs(Rd)},[${Regs(Rb)},${Regs(Ro)}]`,genthumb('STRH','RRR',(Ro,Rb,Rd)=>`0b0101${b2(1,3)}${b2(Ro,3)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+        },
+        '011mm':{
+            3:['ooooobbbddd',(offset,Rb,Rd)=>`LDRB ${Regs(Rd)},[${Regs(Rb)},#${offset}]`    ,genthumb('LDRB','ORR',(o,Rb,Rd)=>`0b011${b2(3,2)}${b2(o,5)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+            1:['ooooobbbddd',(offset,Rb,Rd)=>`LDR  ${Regs(Rd)},[${Regs(Rb)},#${offset*4}]`  ,genthumb('LDR' ,'ORR',(o,Rb,Rd)=>`0b011${b2(1,2)}${b2(o>>2,5)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+            0:['ooooobbbddd',(offset,Rb,Rd)=>`STR  ${Regs(Rd)},[${Regs(Rb)},#${offset*4}]`  ,genthumb('STR' ,'ORR',(o,Rb,Rd)=>`0b011${b2(0,2)}${b2(o>>2,5)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+            2:['ooooobbbddd',(offset,Rb,Rd)=>`STRB ${Regs(Rd)},[${Regs(Rb)},#${offset}]`    ,genthumb('STRB','ORR',(o,Rb,Rd)=>`0b011${b2(2,2)}${b2(o,5)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+        },
+        '100mm':{
+            0:['ooooobbbddd',(offset,Rb,Rd)=>`STRH ${Regs(Rd)},[${Regs(Rb)},#${offset*2}]`,genthumb('STRH','ORR',(o,Rb,Rd)=>`0b100${b2(0,2)}${b2(o>>1,5)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+            1:['ooooobbbddd',(offset,Rb,Rd)=>`LDRH ${Regs(Rd)},[${Regs(Rb)},#${offset*2}]`,genthumb('LDRH','ORR',(o,Rb,Rd)=>`0b100${b2(1,2)}${b2(o>>1,5)}${b2(Rb,3)}${b2(Rd,3)}`|0)],
+            2:['dddoooooooo',   (Rd,offset)=>`STR  ${Regs(Rd)},[SP,#${offset*4}]`         ,genthumb('STR','OSR',(o,Rb,Rd)=>`0b100${b2(2,2)}${b2(Rd,3)}${b2(o>>2,8)}`|0)],
+            3:['dddoooooooo',   (Rd,offset)=>`LDR  ${Regs(Rd)},[SP,#${offset*4}]`         ,genthumb('LDR','OSR',(o,Rb,Rd)=>`0b100${b2(3,2)}${b2(Rd,3)}${b2(o>>2,8)}`|0)],
+        },
+        '1010m':{
+            0:['dddoooooooo',(Rd,offset)=>`ADD  ${Regs(Rd)},[PC,#${offset*4}]`,genthumb('ADD','OPR',(o,Rb,Rd)=>`0b10100${b2(Rd,3)}${b2(o>>2,8)}`|0)],
+            1:['dddoooooooo',(Rd,offset)=>`ADD  ${Regs(Rd)},[SP,#${offset*4}]`,genthumb('ADD','OSR',(o,Rb,Rd)=>`0b10101${b2(Rd,3)}${b2(o>>2,8)}`|0)],
+        },
+        '1011mmmm':{
+            0:{
+                'm':{
+                    0:['ooooooo',(offset)=>`ADD  SP,#${(offset*4)}`,genthumb('ADD','OS',(o,Rd)=>`0b1011${b2(0,4)}0${b2(o>>2,7)}`|0)],
+                    1:['ooooooo',(offset)=>`SUB  SP,#${(offset*4)}`,genthumb('SUB','OS',(o,Rd)=>`0b1011${b2(0,4)}1${b2(o>>2,7)}`|0)],
+                }
+            },
+            2:{
+                'mm':{
+                    0:['sssddd',(Rs,Rd)=>`SXTH ${Regs(Rd)}, ${Regs(Rs)}`,genthumb('SXTH','RR',(Rs,Rd)=>`0b1011${b2(2,4)}${b2(0,2)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    1:['sssddd',(Rs,Rd)=>`SXTB ${Regs(Rd)}, ${Regs(Rs)}`,genthumb('SXTB','RR',(Rs,Rd)=>`0b1011${b2(2,4)}${b2(1,2)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    2:['sssddd',(Rs,Rd)=>`UXTH ${Regs(Rd)}, ${Regs(Rs)}`,genthumb('UXTH','RR',(Rs,Rd)=>`0b1011${b2(2,4)}${b2(2,2)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                    3:['sssddd',(Rs,Rd)=>`UXTB ${Regs(Rd)}, ${Regs(Rs)}`,genthumb('UXTB','RR',(Rs,Rd)=>`0b1011${b2(2,4)}${b2(3,2)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                }
+            },
+            4: ['rrrrrrrr',(r)=>`PUSH {${r&0x80 && 'R7,' || ''}${r&0x40 && 'R6,' || ''}${r&0x20 && 'R5,' || ''}${r&0x10 && 'R4,' || ''}${r&0x8 && 'R3,' || ''}${r&0x4 && 'R2,' || ''}${r&0x2 && 'R1,' || ''}${r&0x1 && 'R0,' || ''}}`.replace(',}','}'),genthumb('PUSH','A',(Rlist)=>`0b1011010${b2(((Rlist&0x100)!=0)|0,1)}${b2(Rlist&0xff,8)}`|0)],
+            5: ['rrrrrrrr',(r)=>`PUSH {${r&0x80 && 'R7,' || ''}${r&0x40 && 'R6,' || ''}${r&0x20 && 'R5,' || ''}${r&0x10 && 'R4,' || ''}${r&0x8 && 'R3,' || ''}${r&0x4 && 'R2,' || ''}${r&0x2 && 'R1,' || ''}${r&0x1 && 'R0,' || ''}LR}`],
+            10:{
+                'mm':{
+                    0:['sssddd',(Rs,Rd)=>`REV  ${Regs(Rd)}, ${Regs(Rs)}`,genthumb('REV','RR',(Rs,Rd)=>`0b1011${b2(10,4)}${b2(0,2)}${b2(Rs,3)}${b2(Rd,3)}`|0)],
+                }
+            },
+            12: ['rrrrrrrr',(r)=>`POP  {${r&0x80 && 'R7,' || ''}${r&0x40 && 'R6,' || ''}${r&0x20 && 'R5,' || ''}${r&0x10 && 'R4,' || ''}${r&0x8 && 'R3,' || ''}${r&0x4 && 'R2,' || ''}${r&0x2 && 'R1,' || ''}${r&0x1 && 'R0,' || ''}}`.replace(',}','}'),genthumb('POP','A',(Rlist)=>`0b1011110${b2(((Rlist&0x200)!=0)|0,1)}${b2(Rlist&0xff,8)}`|0)],
+            13: ['rrrrrrrr',(r)=>`POP  {${r&0x80 && 'R7,' || ''}${r&0x40 && 'R6,' || ''}${r&0x20 && 'R5,' || ''}${r&0x10 && 'R4,' || ''}${r&0x8 && 'R3,' || ''}${r&0x4 && 'R2,' || ''}${r&0x2 && 'R1,' || ''}${r&0x1 && 'R0,' || ''}PC}`],
+            14: ['oooooooo',(o)=>`BKPT #${o}`,genthumb('BKPT','O',(o)=>`0b1011${b2(14,4)}${b2(o,8)}`|0)],
+            15: ['oooooooo',(o)=>((o==0x20)?`WFE`:(o==0x30)?`WFI`:`NOP`),genthumb('WFE','',(o)=>`0b1011${b2(15,4)}${b2(0x20,8)}`|0),genthumb('WFI','',(o)=>`0b1011${b2(15,4)}${b2(0x30,8)}`|0),genthumb('NOP','',(o)=>`0b1011${b2(15,4)}${b2(0,8)}`|0)],
+        },
+        '1100m':{
+            0:['bbboooooooo',(Rb,r)=>`STM  ${Regs(Rb)}!,{${r&0x80 && 'R7,' || ''}${r&0x40 && 'R6,' || ''}${r&0x20 && 'R5,' || ''}${r&0x10 && 'R4,' || ''}${r&0x8 && 'R3,' || ''}${r&0x4 && 'R2,' || ''}${r&0x2 && 'R1,' || ''}${r&0x1 && 'R0,' || ''}}`.replace(',}','}'),genthumb('STM','AR',(Rlist,Rb)=>`0b11000${b2(Rb,3)}${b2(Rlist&0xff,8)}`|0)],
+            1:['bbboooooooo',(Rb,r)=>`LDM  ${Regs(Rb)}!,{${r&0x80 && 'R7,' || ''}${r&0x40 && 'R6,' || ''}${r&0x20 && 'R5,' || ''}${r&0x10 && 'R4,' || ''}${r&0x8 && 'R3,' || ''}${r&0x4 && 'R2,' || ''}${r&0x2 && 'R1,' || ''}${r&0x1 && 'R0,' || ''}}`.replace(',}','}'),genthumb('LDM','AR',(Rlist,Rb)=>`0b11001${b2(Rb,3)}${b2(Rlist&0xff,8)}`|0)],
+        },
+        '1101mmmm':{
+            0: ['oooooooo',(offset)=>Bcond(0,offset) ,genthumb('BEQ','O',(o)=>`0b1101${b2( 0,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+            1: ['oooooooo',(offset)=>Bcond(1,offset) ,genthumb('BNE','O',(o)=>`0b1101${b2( 1,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+            2: ['oooooooo',(offset)=>Bcond(2,offset) ,genthumb('BCS','O',(o)=>`0b1101${b2( 2,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+            3: ['oooooooo',(offset)=>Bcond(3,offset) ,genthumb('BCC','O',(o)=>`0b1101${b2( 3,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+            4: ['oooooooo',(offset)=>Bcond(4,offset) ,genthumb('BMI','O',(o)=>`0b1101${b2( 4,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+            5: ['oooooooo',(offset)=>Bcond(5,offset) ,genthumb('BPL','O',(o)=>`0b1101${b2( 5,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+            6: ['oooooooo',(offset)=>Bcond(6,offset) ,genthumb('BVS','O',(o)=>`0b1101${b2( 6,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+            7: ['oooooooo',(offset)=>Bcond(7,offset) ,genthumb('BVC','O',(o)=>`0b1101${b2( 7,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+            8: ['oooooooo',(offset)=>Bcond(8,offset) ,genthumb('BHI','O',(o)=>`0b1101${b2( 8,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+            9: ['oooooooo',(offset)=>Bcond(9,offset) ,genthumb('BLS','O',(o)=>`0b1101${b2( 9,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+            10:['oooooooo',(offset)=>Bcond(10,offset),genthumb('BGE','O',(o)=>`0b1101${b2(10,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+            11:['oooooooo',(offset)=>Bcond(11,offset),genthumb('BLT','O',(o)=>`0b1101${b2(11,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+            12:['oooooooo',(offset)=>Bcond(12,offset),genthumb('BGT','O',(o)=>`0b1101${b2(12,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+            13:['oooooooo',(offset)=>Bcond(13,offset),genthumb('BLE','O',(o)=>`0b1101${b2(13,4)}${b2(((o>>1)-2)&0xff,8)}`|0)],
+            15:['oooooooo',(offset)=>`SWI  ${offset}`,genthumb('SWI','O',(o)=>`0b1101${b2(15,4)}${b2(o&0xff,8)}`|0)],
+        },
+        '1110m':{
+            0:['ooooooooooo',(offset)=>`B    ${offset&0x400?(lastAddr=(((offset|~0x7ff)<<1)+4)):(lastAddr=((offset<<1)+4))}  ;@PC+BL`,genthumb('B','O',(o)=>`0b11100${b2(((o>>1)-2)&0x7ff,11)}`|0)],
+        },
+        //'1111':['hooooooooooo',(h,offset)=>`${h && ('BL    '+(lastAddr&0x0400?((((offset<<1)+(lastAddr<<12))|-1^(1<<23)-1)+2):2+((offset<<1)+(lastAddr<<12)))) || (';'+(lastAddr=offset)) }`]
+        '1111m':{
+            0:['ooooooooooo',(offset)=>`;${(lastAddr=offset)}`],
+            1:['ooooooooooo',(offset)=>'BL   '+(lastAddr&0x0400?(lastAddr=((((offset<<1)+(lastAddr<<12))|-1^(1<<23)-1)+2)):(lastAddr=(2+((offset<<1)+(lastAddr<<12)))))+'  ;@PC+BL',genthumb('BL','O',(o)=>`0b11110${b2((((o>>1)-1)>>11)&0x7ff,11)}11111${b2(((o>>1)-1)&0x7ff,11)}`|0)],
+        }
+        //['hooooooooooo',(h,offset)=>`${h && ('BL    '+(lastAddr&0x0400?((((offset<<1)+(lastAddr<<12))|-1^(1<<23)-1)+2):2+((offset<<1)+(lastAddr<<12)))) || (';'+(lastAddr=offset)) }`]
+    }
+
+    function parseASM(asm,advaddr=true){
+        let data=new DataHelper();
+        let asmline=asm.split('\n');
+
+        if(advaddr){
+            let addrmap={};
+            let bmap=[];
+            let nullline=[];
+            let addr=0;
+            const labeltype = new Set(['BIC', 'BKPT', 'BX', 'BLX']);
+            for(let i=0;i<asmline.length;i++){
+                const code=asmline[i];
+                if(code.includes(':'))
+                    addrmap[code.split(':')[0].trim()]=addr;
+
+                const e=encodeThumb(code);
+                if(e!=null){
+                    const v=e[0];
+                    if(e[1]=='BL')addr+=2;
+                    if(e[1][0]=='B'){
+                        if(!labeltype.has(e[1]))
+                            bmap.push([i,e[2][0],addr,code]);
+                    }
+                    addr+=2;
+                }
+                else{
+                    nullline.push(i);
+                }
+            }
+            for(let i=0;i<bmap.length;i++){
+                const e=bmap[i];
+                asmline[e[0]]=asmline[e[0]].replace(e[1],`${addrmap[e[1]]-e[2]}`);
+            }
+            nullline.map(x=>(asmline[x]=''));
+            //outputDiv.innerText=asmline.join('\n');
+        }
+        asmline.map(x=>{
+            let e=encodeThumb(x);
+            if(e!=null){
+                const v=e[0];
+                if((v&0xf800)==0xF800)data.w16(v>>16);
+                data.w16(v&0xffff);
+            }
+        });
+        return data.bytes();
+    }
+
+    function encodeThumb(code) {
+        if(code.includes(':')){
+            code=code.split(':')[1];
+        }
+        // Remove comments and trim whitespace
+        const cleanCode = code.split(';')[0].trim().toUpperCase().replaceAll('[','').replaceAll(']','');
+        if (!cleanCode) return null; // Empty line or comment only
+        
+        // Split into instruction and operands
+        const parts = cleanCode.split(/\s+/);
+        const mnemonic = parts[0];
+        const args=parts.slice(1).join('');
+        const operands = args.includes('{')?args.split('!').map(op => op.replace(',{','{')):args.split(',').map(op => op.trim());
+        
+
+        if(mnemonic==='DCW')return [parseInt(operands[0],16),'DWC',[parseInt(operands[0],16)]];
+
+        const FULL_REG_INSTRUCTIONS = new Set(['MOV', 'CMP', 'ADD', 'SUB', 'BX', 'BLX']);
+        const isFullRegInstruction = FULL_REG_INSTRUCTIONS.has(mnemonic);
+        // Generate pattern string from operands
+        let pattern = '';
+        const parsedOperands = [];
+        if(args.length>0)
+        for (const op of operands) {
+            if (/^R([0-9]|1[0-5])$/.test(op)) {
+                let rs=parseInt(op.substring(1));
+                if(rs>7){
+                    pattern = 'H' + pattern;
+                }
+                else{
+                    pattern = 'R' + pattern;
+                }
+                parsedOperands.unshift(rs);
+            } 
+            else if (op === 'SP') {
+                pattern = 'S' + pattern;
+                parsedOperands.unshift(13);
+            }
+            else if (op === 'LR') {
+                pattern = 'L' + pattern;
+                parsedOperands.unshift(14);
+            }
+            else if (op === 'PC') {
+                pattern = 'P' + pattern;
+                parsedOperands.unshift(15);
+            }
+            else if (op.startsWith('#')) {
+                pattern = 'O' + pattern;
+                parsedOperands.unshift(parseInt(op.substring(1)));
+            }
+            else if (op.startsWith('{') && op.endsWith('}')) {
+                pattern = 'A' + pattern;
+                const regs = op.slice(1, -1).split(',');
+                let mask = 0;
+                for (const r of regs) {
+                    const reg = r.trim();
+                    if (reg === 'LR') mask |= 0x100;
+                    else if (reg === 'PC') mask |= 0x200;
+                    else if (reg.startsWith('R')) {
+                        const num = parseInt(reg.substring(1));
+                        mask |= (1 << num);
+                    }
+                }
+                parsedOperands.unshift(mask);
+            }
+            else if (parseInt(op)+Number.MAX_VALUE) {
+                pattern = 'O' + pattern;
+                parsedOperands.unshift(parseInt(op));
+            }
+            else {
+                //throw new Error(`Invalid operand: ${op}`);
+                //console.log(`Invalid operand: ${op}`);
+                parsedOperands.push(op);
+                return [null,mnemonic,parsedOperands];
+            }
+        }
+        
+        // Find matching generator in thumbgenMap
+        if (!thumbgenMap[mnemonic] || !thumbgenMap[mnemonic][pattern]) {
+            if(isFullRegInstruction){
+                pattern=pattern.replaceAll('S','R').replaceAll('P','R').replaceAll('L','R').replaceAll('H','R');
+                if (!thumbgenMap[mnemonic] || !thumbgenMap[mnemonic][pattern]){
+                    throw new Error(`No matching instruction pattern for ${mnemonic} with operands ${pattern}`);
+                }
+            }
+            else
+                throw new Error(`No matching instruction pattern for ${mnemonic} with operands ${pattern}`);
+        }
+        
+        // Call the generator function with parsed operands
+        return [thumbgenMap[mnemonic][pattern](...parsedOperands),mnemonic,parsedOperands];
+    }
+
+    let genasm=(vals,call)=>{
+        switch(vals.length){
+            case 2:return call(vals[1]);
+            case 3:return call(vals[1],vals[2]);
+            case 4:return call(vals[1],vals[2],vals[3]);
+        }
+    }
+    let decode=(tab,vals,org=0)=>{
+        if(tab==null){
+            //console.log('no found'+vals);
+            return `DCW  ${toHex32(org).substring(4)}  ;not found`;
+        }
+        
+        const keys = Object.keys(tab);
+        for (let i = 0; i < keys.length; i++) {
+            const key = keys[i];
+            let v=bits(vals,key);
+            if(!v)continue;
+            let next=tab[key][v[1]];
+            if(Array.isArray(next)){
+                v=bits(v[0],next[0])
+                return genasm(v,next[1]);
+            }
+            else{
+                return decode(next,v[0],vals);
+            }
+        }
+        return;
+    }
+    function test(code){
+        const thumbcode=parseASM(code)
+        if((thumbcode&0xf800)==0xF800)decode(InstructionsCode,thumbcode>>16);
+        const asm=decode(InstructionsCode,thumbcode);
+        console.log(`${code} -> ${toHex32(thumbcode).substring(4)}(0b${b2(thumbcode,16)}) -> ${asm}`);
+    }
+    function parseThumb(bin,addrview=true,jmpfix=true){
+        
+        
+        let asm=[];
+        let addr=0;
+        let base=0x20000000;
+        let dv = new DataView(new Uint8Array(bin).buffer);
+        let count=bin.length;
+        let dcw=[];
+        let qjmp=new Set();
+        while(count>=2){
+            const code=dv.getUint16(addr,true);
+            if (dcw.includes(addr)) {
+                asm.push(addrview?`:${toHex32(base+addr)} ${toHex32(code).substring(4)}  DCW  ${toHex32(code).substring(4)}`:`DCW  ${toHex32(code).substring(4)}`);
+                dcw.splice(dcw.indexOf(addr), 1);
+            } else {
+            const asmv=decode(InstructionsCode,code);
+            //asm.push(asmv);
+            let asmv2=addrview?`:${toHex32(base+addr)} ${toHex32(code).substring(4)}  ${asmv}`:`${asmv}`;
+            if(asmv2.includes(';')){
+                let vaddr;
+                switch(asmv2.split('@')[1]){
+                    case 'PC+ADDR':
+                        vaddr=(addr+lastAddr+4)&~2;
+                        dcw.push(vaddr);
+                        dcw.push(vaddr+2);
+                        asmv2=asmv2.replace('PC+ADDR',`0x${toHex32(base+vaddr)}=0x${(vaddr+4<=bin.length) && toHex32(dv.getUint32(vaddr,true)) || '????????'}`);break;
+                    case 'PC+BL':
+                        if(jmpfix){
+                            if((addr+lastAddr)>=0&&(addr+lastAddr)<bin.length){
+                                asmv2=`${asmv2.split(' ')[0]} Q${toHex32(base+addr+lastAddr)}  ;${asmv2.split(';')[0].trim()}->0x${toHex32(base+addr+lastAddr)} ${AddrName[base+addr+lastAddr] || ''}`;
+                                qjmp.add((addr+lastAddr)>>1);
+                            }
+                            else{
+                                asmv2=addrview?`:${toHex32(base+addr)} ${toHex32(code).substring(4)}  DCW  ${toHex32(code).substring(4)}`:`DCW  ${toHex32(code).substring(4)}`;
+                            }
+                        }
+                        else{
+                            asmv2=asmv2.replace('PC+BL',`0x${toHex32(base+addr+lastAddr)}`);
+                        }
+                        break;
+                    case 'PC+B':
+                        if(jmpfix){
+                            if((addr+lastAddr)>=0&&(addr+lastAddr)<bin.length){
+                                asmv2=`${asmv2.split(' ')[0]} Q${toHex32(base+addr+lastAddr)}  ;${asmv2.split(';')[0].trim()}->0x${toHex32(base+addr+lastAddr)} ${AddrName[base+addr+lastAddr] || ''}`;
+                                qjmp.add((addr+lastAddr)>>1);
+                            }
+                            else{
+                                asmv2=addrview?`:${toHex32(base+addr)} ${toHex32(code).substring(4)}  DCW  ${toHex32(code).substring(4)}`:`DCW  ${toHex32(code).substring(4)}`;
+                            }
+                            
+                        }
+                        else{
+                            asmv2=asmv2.replace('PC+B',`0x${toHex32(base+addr+lastAddr)}`);
+                        }
+                        break;
+                }
+            }
+            asm.push(asmv2);
+            //console.log(`:${toHex32(addr)} ${toHex32(code).substring(4)}  ${asmv}`);
+            }
+            addr+=2;
+            count-=2;
+        }
+        if(jmpfix){
+            Array.from(qjmp).map(x=>asm[x]=`Q${toHex32(base+(x<<1))}:${(AddrName[base+(x<<1)]?'     ;'+AddrName[base+(x<<1)]:'')}\n`+asm[x]);
+        }
+
+        return asm.join('\n').replaceAll(';0\n','');
+    }
+
+    function toHex(v){
+        let hex;
+        if((v&0xf)<10)hex=String.fromCharCode(48+(v&0xf));
+        else hex=String.fromCharCode(65+(v&0xf)-10);
+        v>>>=4;
+        if((v&0xf)<10)hex=String.fromCharCode(48+(v&0xf))+hex;
+        else hex=String.fromCharCode(65+(v&0xf)-10)+hex;
+        return hex;
+    }
+    function toHex32(v){
+        return toHex((v>>>24)&0xff)+toHex((v>>>16)&0xff)+toHex((v>>>8)&0xff)+toHex(v&0xff);
+    }
+    
+    function log32(v){
+        console.log(`0x${toHex32(v)}`);
+    }
+
+*/
+    document.addEventListener('DOMContentLoaded', function() {
+    let imgfile=async function(file) {
+        if (!file) return;
+        let extension = file.name.split('.').pop().toLowerCase();
+        let reader = new FileReader();
+        reader.onload = function(e) {
+            if (extension === 'bin') {
+                prerom=rom;
+                rom = Array.from(new Uint8Array(e.target.result));
+                loadthumb(rom);
+            }
+            else if (extension === 'axf') {
+                    axfinfo = Elfparse(new Uint8Array(e.target.result));
+                    prerom=rom;
+                    rom=Array.from(axfinfo.ROM);
+                    thumbhandle.AddrName=axfinfo.AddrName;
+                    loadthumb(rom);
+            }
+            //console.log(rom);
+            
+            //rom && rom.ROM && (rom.ROM.length>0) && download_selectDevice && download_selectDevice(rom.ROM);
+        };
+        if (extension === 'hex') {
+            reader.readAsText(file);
+        } else {
+            reader.readAsArrayBuffer(file);
+        }
+    }
+
+    document.addEventListener('dragover', function(e) {
+        e.preventDefault();
+    });
+
+    document.addEventListener('paste', function(e) {
+        e.preventDefault();
+        const items = e.clipboardData.items;
+        if (!items || items.length === 0) return;
+        const item = items[0];
+        if (item.kind === 'file') {
+            const file = item.getAsFile();
+            imgfile(file);
+        }
+    });
+
+    document.addEventListener('drop', function(e) {
+        e.preventDefault();
+        const file = e.dataTransfer.files[0];
+        imgfile(file);
+    });
+
+    });
+</script>
+</html>
